@@ -49,11 +49,11 @@ app.get('/api/monthly-summary', requireAuth, async (req, res) => {
   const { rows } = await pool.query(
     `SELECT
        to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month,
-       c.name, c.type, SUM(t.amount) as total, COUNT(*) as txn_count
+       c.id as category_id, c.name, c.type, SUM(t.amount) as total, COUNT(*) as txn_count
      FROM transactions t
      JOIN categories c ON c.id = t.category_id
      WHERE t.txn_date BETWEEN $1 AND $2
-     GROUP BY month, c.name, c.type
+     GROUP BY month, c.id, c.name, c.type
      ORDER BY month DESC, c.type, total DESC`,
     [from, to]
   );
@@ -63,13 +63,27 @@ app.get('/api/monthly-summary', requireAuth, async (req, res) => {
 app.get('/api/summary', requireAuth, async (req, res) => {
   const { from, to } = req.query;
   const { rows } = await pool.query(
-    `SELECT c.name, c.type, SUM(t.amount) as total, COUNT(*) as txn_count
+    `SELECT c.id as category_id, c.name, c.type, SUM(t.amount) as total, COUNT(*) as txn_count
      FROM transactions t
      JOIN categories c ON c.id = t.category_id
      WHERE t.txn_date BETWEEN $1 AND $2
-     GROUP BY c.name, c.type
+     GROUP BY c.id, c.name, c.type
      ORDER BY c.type, total DESC`,
     [from, to]
+  );
+  res.json(rows);
+});
+
+// Individual transactions within a category, for a date range — lets the dashboard drill down
+// from a category total into the actual transactions behind it, to spot-check accuracy.
+app.get('/api/transactions-by-category', requireAuth, async (req, res) => {
+  const { category_id, from, to } = req.query;
+  const { rows } = await pool.query(
+    `SELECT id, txn_date, description_raw, merchant_name, amount, categorized_by, category_confidence, starling_spending_category
+     FROM transactions
+     WHERE category_id = $1 AND txn_date BETWEEN $2 AND $3
+     ORDER BY txn_date DESC`,
+    [category_id, from, to]
   );
   res.json(rows);
 });
