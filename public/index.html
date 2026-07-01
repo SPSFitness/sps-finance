@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SPS Finance</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
   :root {
     --blue: #1a4dff;
@@ -130,6 +131,33 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+  }
+  .charts-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .chart-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .chart-card h2 {
+    font-size: 14px;
+    font-weight: 700;
+    margin: 0;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .chart-wrap {
+    padding: 20px;
+    height: 260px;
+    position: relative;
+  }
+  @media (max-width: 800px) {
+    .charts-row { grid-template-columns: 1fr; }
   }
   .badge {
     background: #fef2f2;
@@ -283,6 +311,17 @@
     </div>
   </div>
 
+  <div class="charts-row">
+    <section class="chart-card">
+      <h2>Where the money goes (expenses)</h2>
+      <div class="chart-wrap"><canvas id="expenseChart"></canvas></div>
+    </section>
+    <section class="chart-card">
+      <h2>Income vs expenses by month</h2>
+      <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
+    </section>
+  </div>
+
   <section>
     <h2>By month</h2>
     <div id="monthlyContainer"></div>
@@ -396,6 +435,79 @@
       `;
       container.appendChild(block);
     });
+
+    renderTrendChart(byMonth, months);
+  }
+
+  let trendChartInstance = null;
+  function renderTrendChart(byMonth, months) {
+    // Chronological order for a trend line (oldest to newest), opposite of the display order above
+    const chronological = [...months].reverse();
+
+    const incomeData = [];
+    const expenseData = [];
+    chronological.forEach(month => {
+      let income = 0, expense = 0;
+      byMonth[month].forEach(r => {
+        const total = Number(r.total);
+        if (r.type === 'income') income += total;
+        if (r.type === 'expense') expense += Math.abs(total);
+      });
+      incomeData.push(income);
+      expenseData.push(expense);
+    });
+
+    const ctx = document.getElementById('trendChart').getContext('2d');
+    if (trendChartInstance) trendChartInstance.destroy();
+
+    if (chronological.length === 0) {
+      ctx.canvas.parentElement.innerHTML = '<div class="empty">No data in this range yet.</div>';
+      return;
+    }
+
+    trendChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: chronological.map(monthLabel),
+        datasets: [
+          {
+            label: 'Income',
+            data: incomeData,
+            borderColor: '#0f9d58',
+            backgroundColor: 'rgba(15,157,88,0.08)',
+            fill: true,
+            tension: 0.25,
+            pointRadius: 3
+          },
+          {
+            label: 'Expenses',
+            data: expenseData,
+            borderColor: '#d93025',
+            backgroundColor: 'rgba(217,48,37,0.08)',
+            fill: true,
+            tension: 0.25,
+            pointRadius: 3
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: {
+            ticks: { callback: (v) => '£' + v.toLocaleString('en-GB') }
+          }
+        },
+        plugins: {
+          legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ` ${ctx.dataset.label}: ${fmt(ctx.parsed.y)}`
+            }
+          }
+        }
+      }
+    });
   }
 
   async function loadSummary() {
@@ -428,6 +540,55 @@
     document.getElementById('totalIncome').textContent = fmt(income);
     document.getElementById('totalExpense').textContent = fmt(expense);
     document.getElementById('totalNet').textContent = fmt(income - expense);
+
+    renderExpenseChart(rows);
+  }
+
+  let expenseChartInstance = null;
+  function renderExpenseChart(rows) {
+    const expenseRows = rows
+      .filter(r => r.type === 'expense')
+      .map(r => ({ name: r.name, total: Math.abs(Number(r.total)) }))
+      .sort((a, b) => b.total - a.total);
+
+    const palette = ['#1a4dff', '#23ccda', '#0b0b0f', '#6b7280', '#93c5fd', '#5eead4',
+                      '#a5b4fc', '#c7d2fe', '#94a3b8', '#0e7490', '#312e81', '#1e293b'];
+
+    const ctx = document.getElementById('expenseChart').getContext('2d');
+    if (expenseChartInstance) expenseChartInstance.destroy();
+
+    if (expenseRows.length === 0) {
+      ctx.canvas.parentElement.innerHTML = '<div class="empty">No expense data in this range yet.</div>';
+      return;
+    }
+
+    expenseChartInstance = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: expenseRows.map(r => r.name),
+        datasets: [{
+          data: expenseRows.map(r => r.total),
+          backgroundColor: palette,
+          borderColor: '#ffffff',
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: { boxWidth: 12, font: { size: 11 }, padding: 10 }
+          },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ` ${ctx.label}: ${fmt(ctx.parsed)}`
+            }
+          }
+        }
+      }
+    });
   }
 
   async function loadReview() {
