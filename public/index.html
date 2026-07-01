@@ -83,6 +83,70 @@
     font-weight: 600;
     text-align: center;
   }
+  .presets {
+    background: white;
+    border-bottom: 1px solid var(--border);
+    padding: 10px 28px;
+    display: flex;
+    gap: 8px;
+  }
+  .presets button {
+    background: white;
+    border: 1px solid var(--border);
+    color: var(--black);
+    padding: 6px 14px;
+    border-radius: 100px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .presets button:hover {
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+  .vat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+  }
+  .vat-card .vat-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 10px;
+  }
+  .vat-card .vat-label {
+    font-size: 12px;
+    color: var(--grey);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+  .vat-card .vat-figure {
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .vat-bar-track {
+    background: #f1f3f5;
+    border-radius: 100px;
+    height: 10px;
+    overflow: hidden;
+  }
+  .vat-bar-fill {
+    height: 100%;
+    border-radius: 100px;
+    transition: width 0.3s;
+  }
+  .vat-bar-fill.ok { background: var(--income); }
+  .vat-bar-fill.warn { background: #f59e0b; }
+  .vat-bar-fill.danger { background: var(--expense); }
+  .vat-note {
+    font-size: 12px;
+    color: var(--grey);
+    margin-top: 8px;
+  }
   main {
     max-width: 1100px;
     margin: 0 auto;
@@ -293,9 +357,24 @@
   </div>
 </header>
 
+<div class="presets">
+  <button onclick="setPreset('ytd')">Tax Year to Date</button>
+  <button onclick="setPreset('month')">This Month</button>
+  <button onclick="setPreset('rolling12')">Rolling 12 Months</button>
+</div>
+
 <div class="period-banner" id="periodBanner"></div>
 
 <main>
+  <div class="vat-card" id="vatCard">
+    <div class="vat-top">
+      <span class="vat-label">VAT threshold — rolling 12 months (always current, regardless of dates above)</span>
+      <span class="vat-figure" id="vatFigure">Loading...</span>
+    </div>
+    <div class="vat-bar-track"><div class="vat-bar-fill ok" id="vatBarFill" style="width:0%"></div></div>
+    <div class="vat-note" id="vatNote"></div>
+  </div>
+
   <div class="cards">
     <div class="card">
       <div class="label">Income</div>
@@ -645,6 +724,54 @@
     loadReview();
   }
 
+  function toISODate(d) { return d.toISOString().slice(0, 10); }
+
+  function setPreset(kind) {
+    const today = new Date();
+    let from, to = toISODate(today);
+
+    if (kind === 'ytd') {
+      // UK tax year starts 6 April — if we're before 6 April this calendar year, the tax year started last year
+      const taxYearStart = new Date(today.getFullYear(), 3, 6); // month is 0-indexed, 3 = April
+      if (today < taxYearStart) taxYearStart.setFullYear(taxYearStart.getFullYear() - 1);
+      from = toISODate(taxYearStart);
+    } else if (kind === 'month') {
+      from = toISODate(new Date(today.getFullYear(), today.getMonth(), 1));
+    } else if (kind === 'rolling12') {
+      const rollingStart = new Date(today);
+      rollingStart.setFullYear(rollingStart.getFullYear() - 1);
+      from = toISODate(rollingStart);
+    }
+
+    document.getElementById('from').value = from;
+    document.getElementById('to').value = to;
+    loadSummary();
+    loadMonthly();
+  }
+
+  async function loadVatCheck() {
+    const data = await api('/api/vat-check');
+    const pct = Math.min(100, (data.rollingTotal / data.threshold) * 100);
+    const fill = document.getElementById('vatBarFill');
+    fill.style.width = pct + '%';
+    fill.className = 'vat-bar-fill ' + (pct >= 90 ? 'danger' : pct >= 75 ? 'warn' : 'ok');
+
+    document.getElementById('vatFigure').textContent =
+      `${fmt(data.rollingTotal)} of ${fmt(data.threshold)}`;
+
+    const note = document.getElementById('vatNote');
+    if (pct >= 100) {
+      note.textContent = `You're over the £${data.threshold.toLocaleString('en-GB')} threshold — registration is likely required within 30 days if this holds. Check with your accountant.`;
+      note.style.color = 'var(--expense)';
+    } else if (pct >= 90) {
+      note.textContent = `${fmt(data.remaining)} of headroom left before the threshold — worth a conversation with your accountant now.`;
+      note.style.color = '#b45309';
+    } else {
+      note.textContent = `${fmt(data.remaining)} of headroom left before the £${data.threshold.toLocaleString('en-GB')} threshold, based on trading income over the last 12 months.`;
+      note.style.color = 'var(--grey)';
+    }
+  }
+
   // Default range: tax year start to today
   const today = new Date().toISOString().slice(0, 10);
   document.getElementById('from').value = '2026-04-06';
@@ -655,6 +782,7 @@
     await loadSummary();
     await loadMonthly();
     await loadReview();
+    await loadVatCheck();
   })();
 </script>
 
