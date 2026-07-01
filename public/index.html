@@ -40,8 +40,20 @@
   header h1 span { color: var(--teal); }
   .date-controls {
     display: flex;
-    gap: 8px;
-    align-items: center;
+    gap: 12px;
+    align-items: flex-end;
+  }
+  .date-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .date-field label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #9ca3af;
+    font-weight: 600;
   }
   .date-controls input {
     background: #1a1a22;
@@ -55,11 +67,20 @@
     background: var(--blue);
     color: white;
     border: none;
-    padding: 7px 16px;
+    padding: 8px 16px;
     border-radius: 6px;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
+  }
+  .period-banner {
+    background: #eef2ff;
+    border-bottom: 1px solid var(--border);
+    padding: 10px 28px;
+    font-size: 13px;
+    color: var(--blue);
+    font-weight: 600;
+    text-align: center;
   }
   main {
     max-width: 1100px;
@@ -166,11 +187,19 @@
 <header>
   <h1>SPS <span>Finance</span></h1>
   <div class="date-controls">
-    <input type="date" id="from">
-    <input type="date" id="to">
+    <div class="date-field">
+      <label for="from">From</label>
+      <input type="date" id="from">
+    </div>
+    <div class="date-field">
+      <label for="to">To</label>
+      <input type="date" id="to">
+    </div>
     <button onclick="loadSummary()">Update</button>
   </div>
 </header>
+
+<div class="period-banner" id="periodBanner"></div>
 
 <main>
   <div class="cards">
@@ -225,9 +254,18 @@
     CATEGORIES = await api('/api/categories');
   }
 
+  function formatDateReadable(isoDate) {
+    const d = new Date(isoDate);
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
   async function loadSummary() {
     const from = document.getElementById('from').value;
     const to = document.getElementById('to').value;
+
+    document.getElementById('periodBanner').textContent =
+      `Showing transactions from ${formatDateReadable(from)} to ${formatDateReadable(to)} — change the dates above and click Update to view a different period`;
+
     const rows = await api(`/api/summary?from=${from}&to=${to}`);
 
     let income = 0, expense = 0;
