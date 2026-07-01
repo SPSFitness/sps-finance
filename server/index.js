@@ -16,7 +16,23 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// Dashboard data — summary by category for a date range
+// Monthly breakdown — income/expense/net per month, plus category detail within each month
+app.get('/api/monthly-summary', requireAuth, async (req, res) => {
+  const { from, to } = req.query;
+  const { rows } = await pool.query(
+    `SELECT
+       to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month,
+       c.name, c.type, SUM(t.amount) as total, COUNT(*) as txn_count
+     FROM transactions t
+     JOIN categories c ON c.id = t.category_id
+     WHERE t.txn_date BETWEEN $1 AND $2
+     GROUP BY month, c.name, c.type
+     ORDER BY month DESC, c.type, total DESC`,
+    [from, to]
+  );
+  res.json(rows);
+});
+
 app.get('/api/summary', requireAuth, async (req, res) => {
   const { from, to } = req.query;
   const { rows } = await pool.query(
