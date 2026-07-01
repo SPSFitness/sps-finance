@@ -3,13 +3,11 @@
 
 CREATE TABLE IF NOT EXISTS accounts (
     id              SERIAL PRIMARY KEY,
-    provider        TEXT NOT NULL DEFAULT 'truelayer',
-    provider_account_id TEXT NOT NULL UNIQUE,   -- TrueLayer's account_id
+    provider        TEXT NOT NULL DEFAULT 'starling',
+    provider_account_id TEXT NOT NULL UNIQUE,   -- Starling's accountUid
+    starling_category_uid TEXT,                 -- Starling's defaultCategory, required for the transactions feed
     display_name    TEXT NOT NULL,               -- e.g. "SPS Starling Business"
     currency        TEXT NOT NULL DEFAULT 'GBP',
-    access_token    TEXT,                        -- encrypted at rest, see server/crypto.js
-    refresh_token   TEXT,
-    token_expires_at TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

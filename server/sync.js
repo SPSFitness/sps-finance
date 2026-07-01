@@ -3,10 +3,10 @@ const pool = require('./db');
 const { ingestForAccount } = require('./ingest');
 
 async function run() {
-  const to = new Date().toISOString().slice(0, 10);
+  const to = new Date().toISOString();
   const fromDate = new Date();
-  fromDate.setDate(fromDate.getDate() - 7); // 7-day overlap catches anything that posted late
-  const from = fromDate.toISOString().slice(0, 10);
+  fromDate.setDate(fromDate.getDate() - 7); // 7-day overlap catches anything that settled late
+  const from = fromDate.toISOString();
 
   const { rows: accounts } = await pool.query(`SELECT * FROM accounts`);
   for (const account of accounts) {

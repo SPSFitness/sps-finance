@@ -1,23 +1,8 @@
 const pool = require('./db');
-const { refreshAccessToken, getTransactions } = require('./truelayer');
+const { getTransactions } = require('./starling');
 const { categorizeTransaction } = require('./categorize');
 
-async function getValidAccessToken(account) {
-  const expiresAt = new Date(account.token_expires_at);
-  if (expiresAt > new Date(Date.now() + 60000)) {
-    return account.access_token;
-  }
-  // Token expired or about to — refresh it
-  const tokens = await refreshAccessToken(account.refresh_token);
-  const newExpiry = new Date(Date.now() + tokens.expires_in * 1000);
-  await pool.query(
-    `UPDATE accounts SET access_token = $1, refresh_token = $2, token_expires_at = $3 WHERE id = $4`,
-    [tokens.access_token, tokens.refresh_token || account.refresh_token, newExpiry, account.id]
-  );
-  return tokens.access_token;
-}
-
-// Pulls transactions for one account between from/to (YYYY-MM-DD), inserts new ones, categorises them.
+// Pulls transactions for one account between from/to (ISO 8601 timestamps), inserts new ones, categorises them.
 async function ingestForAccount(account, from, to, syncType) {
   let pulled = 0;
   let inserted = 0;
@@ -25,11 +10,16 @@ async function ingestForAccount(account, from, to, syncType) {
   let errorMessage = null;
 
   try {
-    const accessToken = await getValidAccessToken(account);
-    const txns = await getTransactions(accessToken, account.provider_account_id, from, to);
-    pulled = txns.length;
+    const items = await getTransactions(account.provider_account_id, account.starling_category_uid, from, to);
+    pulled = items.length;
 
-    for (const t of txns) {
+    for (const item of items) {
+      // Starling includes pending/upcoming items — only ingest settled ones to keep totals accurate
+      if (item.status !== 'SETTLED') continue;
+
+      const amount = (item.amount.minorUnits / 100) * (item.direction === 'OUT' ? -1 : 1);
+      const description = item.reference || item.counterPartyName || '';
+
       const result = await pool.query(
         `INSERT INTO transactions (account_id, provider_txn_id, txn_date, amount, currency, description_raw, merchant_name)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -37,12 +27,12 @@ async function ingestForAccount(account, from, to, syncType) {
          RETURNING id`,
         [
           account.id,
-          t.transaction_id,
-          t.timestamp.slice(0, 10),
-          t.amount,
-          t.currency || 'GBP',
-          t.description || '',
-          t.merchant_name || null
+          item.feedItemUid,
+          item.transactionTime.slice(0, 10),
+          amount,
+          item.amount.currency,
+          description,
+          item.counterPartyName || null
         ]
       );
       if (result.rows.length > 0) {
@@ -59,7 +49,7 @@ async function ingestForAccount(account, from, to, syncType) {
   await pool.query(
     `INSERT INTO sync_log (account_id, sync_type, from_date, to_date, txns_pulled, txns_new, status, error_message)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [account.id, syncType, from, to, pulled, inserted, status, errorMessage]
+    [account.id, syncType, from.slice(0, 10), to.slice(0, 10), pulled, inserted, status, errorMessage]
   );
 
   return { pulled, inserted, status, errorMessage };

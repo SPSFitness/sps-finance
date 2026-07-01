@@ -7,78 +7,99 @@ flags anything uncertain for your review, gives you a live P&L-style dashboard.
 Does **not** submit PAYE — that stays on HMRC Basic PAYE Tools as agreed. This is purely the
 bookkeeping side.
 
-## 1. Set up Postgres on Render
+Uses Starling's own developer API directly (Personal Access Token) — no TrueLayer, no
+Open Banking aggregator, no production approval wait. You already have your token if you're
+reading this after setup.
 
-1. Render dashboard → New → PostgreSQL. Free tier is fine to start.
-2. Copy the "External Database URL" it gives you → this is your `DATABASE_URL`.
-3. Connect to it (Render gives you a "Connect" button with a psql command, or use any Postgres client) and run:
-   ```
-   psql <your-database-url> -f db/schema.sql
-   ```
-   This creates all tables and pre-loads your starter categories.
+## What's already done (as of this build)
 
-## 2. Create a TrueLayer developer account
+- Postgres database created on Render
+- Web service deployed on Render, connected to your GitHub repo
+- Starling Personal Access Token created
 
-1. Go to console.truelayer.com, sign up (free).
-2. Create a new app. Note your **Client ID** and **Client Secret**.
-3. Under "Redirect URIs", add: `https://<your-render-app-name>.onrender.com/auth/callback`
-   (you'll get the real Render URL in step 4 — come back and add it once you know it)
-4. TrueLayer will initially put you in a review/limited-live mode for real bank connections.
-   Starling is on their standard supported bank list, so this should work without extra approval,
-   but check console.truelayer.com for any "go live" checklist items they flag for your app.
+## What's left to do
 
-## 3. Deploy to Render
+### 1. Update environment variables on Render
 
-1. Push this folder to a GitHub repo (e.g. `SPSFitness/sps-finance`, matching your other projects).
-2. Render dashboard → New → Web Service → connect the repo.
-3. Build command: `npm install`
-   Start command: `npm start`
-4. Add environment variables (from `.env.example`):
-   - `DATABASE_URL` (from step 1)
-   - `TRUELAYER_CLIENT_ID`, `TRUELAYER_CLIENT_SECRET` (from step 2)
-   - `TRUELAYER_REDIRECT_URI` — `https://<your-actual-render-url>.onrender.com/auth/callback`
-   - `TRUELAYER_ENV=live`
-   - `ANTHROPIC_API_KEY` — your API key from console.anthropic.com
-   - `TAX_YEAR_START=2026-04-06`
-   - `APP_SECRET` — make up a long random string, this is what protects your dashboard
-5. Deploy. Once it's live, go back to TrueLayer console and confirm the redirect URI matches exactly.
+Go to your `sps-finance` service on Render → **Environment** tab → **Edit**, and set:
 
-## 4. Connect Starling
+- `DATABASE_URL` — should already be set
+- `STARLING_ACCESS_TOKEN` — your Personal Access Token from developer.starlingbank.com
+- `ANTHROPIC_API_KEY` — your key from console.anthropic.com
+- `TAX_YEAR_START` — `2026-04-06`
+- `APP_SECRET` — a long random password of your choosing, protects your dashboard
 
-1. Visit `https://<your-render-url>.onrender.com/auth/connect`
-2. You'll be sent to TrueLayer's bank selection — choose Starling, log in and approve access
-   the same way you would for any other Open Banking connection.
-3. On success you'll see a confirmation with your account name(s) — this means the account
-   is now saved in your database with tokens ready to use.
+You can now **delete** these if they're still there — no longer needed:
+- `TRUELAYER_CLIENT_ID`
+- `TRUELAYER_CLIENT_SECRET`
+- `TRUELAYER_REDIRECT_URI`
+- `TRUELAYER_ENV`
 
-## 5. Backfill from the start of the tax year
+Save — Render will redeploy automatically.
 
-Run this once, from your local machine or a Render shell, with the same environment variables set:
+### 2. Push this updated code to GitHub
+
+Replace the contents of your `sps-finance` repo with everything in this folder (the whole
+`server/` folder has changed, plus this README and `.env.example`). Render will pick up the
+push and redeploy automatically if it's connected to auto-deploy — otherwise trigger a manual
+deploy from the Render dashboard.
+
+### 3. Run the database schema update
+
+The `accounts` table structure changed slightly (no more OAuth tokens stored, just Starling's
+account and category IDs). If you already ran the old schema, run this against your database:
+
+```sql
+ALTER TABLE accounts DROP COLUMN IF EXISTS access_token;
+ALTER TABLE accounts DROP COLUMN IF EXISTS refresh_token;
+ALTER TABLE accounts DROP COLUMN IF EXISTS token_expires_at;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS starling_category_uid TEXT;
+ALTER TABLE accounts ALTER COLUMN provider SET DEFAULT 'starling';
+```
+
+If this is a fresh database that never ran the old schema, just run the whole `db/schema.sql`
+file as normal — no changes needed on your end.
+
+### 4. Run the backfill
+
+This is now a single command — it automatically fetches your account details from Starling
+first (no separate "connect" step needed), then pulls every transaction from 6 April 2026 to
+today, categorising as it goes:
 
 ```
 npm run backfill
 ```
 
-This pulls every transaction from 6 April 2026 to today, in monthly chunks (some banks limit
-how much history a single request returns, so chunking guarantees nothing gets missed), inserts
-them, and runs them through the categoriser. It'll print how many transactions ended up flagged
-for manual review.
+Run this from your own machine or a Render Shell, with the same environment variables
+available (if running locally, copy your real values into a `.env` file first).
 
-## 6. Check the dashboard
+### 5. Check the dashboard
 
-Visit `https://<your-render-url>.onrender.com/?key=<your-APP_SECRET>`
+Visit `https://sps-finance.onrender.com/?key=<your-APP_SECRET>`
 
 - Top cards: income, expenses, net for the tax year to date
 - By category table: exactly what's coming in and going out, by your actual categories
 - Needs review: anything the rules and AI couldn't confidently place — pick the right category
-  and hit Confirm. This does not create a new rule automatically, so a one-off doesn't quietly
-  change future categorisation; add a proper rule (see below) if it's a recurring one.
+  and hit Confirm
 
-## 7. Tighten up the categorisation rules
+### 6. Daily sync
 
-The AI fallback is solid but rules are instant, free, and 100% predictable — worth adding rules
-for anything recurring (Stripe payouts, GoCardless, specific suppliers, etc). Add directly in
-the database:
+Runs automatically at 6am every day once deployed, pulling the last 7 days to catch anything
+that settled late. No action needed once it's live.
+
+## One thing to know about Starling's Personal Access Token
+
+Unlike an OAuth connection, this token doesn't refresh itself automatically and will need
+manual renewal eventually (Starling's docs don't fix an exact expiry, but treat it as something
+to check periodically). If the daily sync starts failing, the first thing to check is whether
+the token has expired — regenerate it at developer.starlingbank.com/personal/token and update
+`STARLING_ACCESS_TOKEN` on Render.
+
+## Tightening up categorisation rules
+
+The AI fallback is solid but rules are instant, free, and 100% predictable — worth adding for
+anything recurring (Stripe payouts, GoCardless, specific suppliers). Add directly in the
+database:
 
 ```sql
 INSERT INTO category_rules (category_id, match_type, match_value, priority)
@@ -90,19 +111,11 @@ VALUES (
 );
 ```
 
-Lower priority number = checked first. Once a rule exists, every future transaction matching
-it skips the AI call entirely.
-
-## 8. Daily sync
-
-Runs automatically at 6am every day once deployed (built into `server/index.js` via cron),
-pulling the last 7 days to catch anything that posted late. No action needed from you once
-it's live. Check `/api/sync-log?key=<your-APP_SECRET>` if you ever want to confirm it ran.
+Lower priority number = checked first.
 
 ## What to double check before binning QuickBooks
 
-- Compare a month's totals here against QuickBooks for the same period — confirm they match
-  before you rely on this for accountant handoff
-- Make sure your accountant is happy with the categories/`hmrc_group` mapping in `categories`
-  table, tweak names if they want different groupings for your tax return
+- Compare a month's totals here against QuickBooks for the same period
+- Make sure your accountant is happy with the category groupings — tweak names in the
+  `categories` table if needed
 - Keep QuickBooks running in parallel for one full month as a sanity check before cancelling it
