@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPS Finance</title>
+<style>
+  :root {
+    --blue: #1a4dff;
+    --teal: #23ccda;
+    --black: #0b0b0f;
+    --grey: #6b7280;
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --border: #e5e7eb;
+    --income: #0f9d58;
+    --expense: #d93025;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--black);
+  }
+  header {
+    background: var(--black);
+    color: white;
+    padding: 20px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  header h1 span { color: var(--teal); }
+  .date-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .date-controls input {
+    background: #1a1a22;
+    border: 1px solid #333;
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .date-controls button {
+    background: var(--blue);
+    color: white;
+    border: none;
+    padding: 7px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 28px;
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .card .label {
+    font-size: 12px;
+    color: var(--grey);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+  .card .value {
+    font-size: 28px;
+    font-weight: 700;
+    margin-top: 6px;
+    letter-spacing: -0.02em;
+  }
+  .value.income { color: var(--income); }
+  .value.expense { color: var(--expense); }
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  section h2 {
+    font-size: 14px;
+    font-weight: 700;
+    margin: 0;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .badge {
+    background: #fef2f2;
+    color: var(--expense);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 100px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--grey);
+    padding: 10px 20px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  tr:last-child td { border-bottom: none; }
+  .amount { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .amount.pos { color: var(--income); }
+  .amount.neg { color: var(--expense); }
+  select, .fix-btn {
+    font-size: 13px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .fix-btn {
+    background: var(--blue);
+    color: white;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .empty {
+    padding: 24px 20px;
+    color: var(--grey);
+    font-size: 13px;
+  }
+  .conf {
+    font-size: 11px;
+    color: var(--grey);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SPS <span>Finance</span></h1>
+  <div class="date-controls">
+    <input type="date" id="from">
+    <input type="date" id="to">
+    <button onclick="loadSummary()">Update</button>
+  </div>
+</header>
+
+<main>
+  <div class="cards">
+    <div class="card">
+      <div class="label">Income</div>
+      <div class="value income" id="totalIncome">£0</div>
+    </div>
+    <div class="card">
+      <div class="label">Expenses</div>
+      <div class="value expense" id="totalExpense">£0</div>
+    </div>
+    <div class="card">
+      <div class="label">Net</div>
+      <div class="value" id="totalNet">£0</div>
+    </div>
+  </div>
+
+  <section>
+    <h2>By category</h2>
+    <table id="summaryTable">
+      <thead><tr><th>Category</th><th style="text-align:right">Transactions</th><th style="text-align:right">Total</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Needs review <span class="badge" id="reviewCount">0</span></h2>
+    <table id="reviewTable">
+      <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Category</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const KEY = params.get('key') || '';
+  let CATEGORIES = [];
+
+  function fmt(n) {
+    const num = Number(n);
+    return (num < 0 ? '-£' : '£') + Math.abs(num).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  async function api(path) {
+    const res = await fetch(path + (path.includes('?') ? '&' : '?') + 'key=' + KEY);
+    if (!res.ok) throw new Error('API error: ' + res.status);
+    return res.json();
+  }
+
+  async function loadCategories() {
+    CATEGORIES = await api('/api/categories');
+  }
+
+  async function loadSummary() {
+    const from = document.getElementById('from').value;
+    const to = document.getElementById('to').value;
+    const rows = await api(`/api/summary?from=${from}&to=${to}`);
+
+    let income = 0, expense = 0;
+    const tbody = document.querySelector('#summaryTable tbody');
+    tbody.innerHTML = '';
+
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="empty">No categorised transactions in this range yet.</td></tr>';
+    }
+
+    rows.forEach(r => {
+      const total = Number(r.total);
+      if (r.type === 'income') income += total;
+      if (r.type === 'expense') expense += Math.abs(total);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.name}</td><td style="text-align:right">${r.txn_count}</td>
+        <td class="amount ${total >= 0 ? 'pos' : 'neg'}">${fmt(total)}</td>`;
+      tbody.appendChild(tr);
+    });
+
+    document.getElementById('totalIncome').textContent = fmt(income);
+    document.getElementById('totalExpense').textContent = fmt(expense);
+    document.getElementById('totalNet').textContent = fmt(income - expense);
+  }
+
+  async function loadReview() {
+    const rows = await api('/api/review');
+    document.getElementById('reviewCount').textContent = rows.length;
+    const tbody = document.querySelector('#reviewTable tbody');
+    tbody.innerHTML = '';
+
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">Nothing needs review right now.</td></tr>';
+      return;
+    }
+
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      const options = CATEGORIES.map(c =>
+        `<option value="${c.id}" ${c.id === r.category_id ? 'selected' : ''}>${c.name}</option>`
+      ).join('');
+      tr.innerHTML = `
+        <td>${r.txn_date}</td>
+        <td>${r.description_raw}${r.category_confidence ? `<div class="conf">AI confidence: ${(r.category_confidence * 100).toFixed(0)}%</div>` : ''}</td>
+        <td class="amount ${r.amount >= 0 ? 'pos' : 'neg'}">${fmt(r.amount)}</td>
+        <td><select id="cat-${r.id}">${options}</select></td>
+        <td><button class="fix-btn" onclick="fixCategory(${r.id})">Confirm</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function fixCategory(txnId) {
+    const categoryId = document.getElementById(`cat-${txnId}`).value;
+    await fetch(`/api/transactions/${txnId}/category?key=${KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category_id: Number(categoryId) })
+    });
+    loadReview();
+  }
+
+  // Default range: tax year start to today
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('from').value = '2026-04-06';
+  document.getElementById('to').value = today;
+
+  (async () => {
+    await loadCategories();
+    await loadSummary();
+    await loadReview();
+  })();
+</script>
+
+</body>
+</html>
