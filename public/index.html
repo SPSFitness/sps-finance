@@ -180,6 +180,18 @@
     font-size: 11px;
     color: var(--grey);
   }
+  .fix-options {
+    font-size: 11px;
+    color: var(--grey);
+  }
+  .fix-options label {
+    display: block;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .fix-options input {
+    margin-right: 4px;
+  }
   .month-block {
     border-bottom: 1px solid var(--border);
   }
@@ -274,7 +286,7 @@
   <section>
     <h2>Needs review <span class="badge" id="reviewCount">0</span></h2>
     <table id="reviewTable">
-      <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Category</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Category</th><th>Options</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </section>
@@ -410,7 +422,7 @@
     tbody.innerHTML = '';
 
     if (rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">Nothing needs review right now.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">Nothing needs review right now.</td></tr>';
       return;
     }
 
@@ -424,6 +436,10 @@
         <td>${r.description_raw}${r.category_confidence ? `<div class="conf">AI confidence: ${(r.category_confidence * 100).toFixed(0)}%</div>` : ''}</td>
         <td class="amount ${r.amount >= 0 ? 'pos' : 'neg'}">${fmt(r.amount)}</td>
         <td><select id="cat-${r.id}">${options}</select></td>
+        <td class="fix-options">
+          <label><input type="checkbox" id="rule-${r.id}" checked> Remember this</label>
+          <label><input type="checkbox" id="similar-${r.id}"> Apply to all matching</label>
+        </td>
         <td><button class="fix-btn" onclick="fixCategory(${r.id})">Confirm</button></td>
       `;
       tbody.appendChild(tr);
@@ -432,10 +448,12 @@
 
   async function fixCategory(txnId) {
     const categoryId = document.getElementById(`cat-${txnId}`).value;
+    const createRule = document.getElementById(`rule-${txnId}`).checked;
+    const applyToSimilar = document.getElementById(`similar-${txnId}`).checked;
     await fetch(`/api/transactions/${txnId}/category?key=${KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category_id: Number(categoryId) })
+      body: JSON.stringify({ category_id: Number(categoryId), create_rule: createRule, apply_to_similar: applyToSimilar })
     });
     loadReview();
   }
