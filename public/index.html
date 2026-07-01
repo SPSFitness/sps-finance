@@ -1,91 +1,457 @@
-require('dotenv').config();
-const express = require('express');
-const cron = require('node-cron');
-const path = require('path');
-const pool = require('./db');
-const { exec } = require('child_process');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPS Finance</title>
+<style>
+  :root {
+    --blue: #1a4dff;
+    --teal: #23ccda;
+    --black: #0b0b0f;
+    --grey: #6b7280;
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --border: #e5e7eb;
+    --income: #0f9d58;
+    --expense: #d93025;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--black);
+  }
+  header {
+    background: var(--black);
+    color: white;
+    padding: 20px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  header h1 span { color: var(--teal); }
+  .date-controls {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+  }
+  .date-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .date-field label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #9ca3af;
+    font-weight: 600;
+  }
+  .date-controls input {
+    background: #1a1a22;
+    border: 1px solid #333;
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .date-controls button {
+    background: var(--blue);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .period-banner {
+    background: #eef2ff;
+    border-bottom: 1px solid var(--border);
+    padding: 10px 28px;
+    font-size: 13px;
+    color: var(--blue);
+    font-weight: 600;
+    text-align: center;
+  }
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 28px;
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .card .label {
+    font-size: 12px;
+    color: var(--grey);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+  .card .value {
+    font-size: 28px;
+    font-weight: 700;
+    margin-top: 6px;
+    letter-spacing: -0.02em;
+  }
+  .value.income { color: var(--income); }
+  .value.expense { color: var(--expense); }
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  section h2 {
+    font-size: 14px;
+    font-weight: 700;
+    margin: 0;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .badge {
+    background: #fef2f2;
+    color: var(--expense);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 100px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--grey);
+    padding: 10px 20px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  tr:last-child td { border-bottom: none; }
+  .amount { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .amount.pos { color: var(--income); }
+  .amount.neg { color: var(--expense); }
+  select, .fix-btn {
+    font-size: 13px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .fix-btn {
+    background: var(--blue);
+    color: white;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .empty {
+    padding: 24px 20px;
+    color: var(--grey);
+    font-size: 13px;
+  }
+  .conf {
+    font-size: 11px;
+    color: var(--grey);
+  }
+  .month-block {
+    border-bottom: 1px solid var(--border);
+  }
+  .month-block:last-child { border-bottom: none; }
+  .month-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 20px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .month-header:hover { background: #fafafa; }
+  .month-title {
+    font-weight: 700;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .month-title .chevron {
+    font-size: 11px;
+    color: var(--grey);
+    transition: transform 0.15s;
+  }
+  .month-block.open .chevron { transform: rotate(90deg); }
+  .month-totals {
+    display: flex;
+    gap: 20px;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  .month-totals .lbl { color: var(--grey); margin-right: 4px; }
+  .month-detail {
+    display: none;
+    padding: 0 20px 16px 20px;
+  }
+  .month-block.open .month-detail { display: block; }
+  .month-detail table { font-size: 13px; }
+  .month-detail th { padding: 6px 10px; }
+  .month-detail td { padding: 6px 10px; }
+</style>
+</head>
+<body>
 
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, '..', 'public')));
+<header>
+  <h1>SPS <span>Finance</span></h1>
+  <div class="date-controls">
+    <div class="date-field">
+      <label for="from">From</label>
+      <input type="date" id="from">
+    </div>
+    <div class="date-field">
+      <label for="to">To</label>
+      <input type="date" id="to">
+    </div>
+    <button onclick="loadSummary(); loadMonthly();">Update</button>
+  </div>
+</header>
 
-// Simple shared-secret check for anything sensitive.
-function requireAuth(req, res, next) {
-  const key = req.query.key || req.headers['x-app-secret'];
-  if (key !== process.env.APP_SECRET) return res.status(401).json({ error: 'unauthorized' });
-  next();
-}
+<div class="period-banner" id="periodBanner"></div>
 
-// Monthly breakdown — income/expense/net per month, plus category detail within each month
-app.get('/api/monthly-summary', requireAuth, async (req, res) => {
-  const { from, to } = req.query;
-  const { rows } = await pool.query(
-    `SELECT
-       to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month,
-       c.name, c.type, SUM(t.amount) as total, COUNT(*) as txn_count
-     FROM transactions t
-     JOIN categories c ON c.id = t.category_id
-     WHERE t.txn_date BETWEEN $1 AND $2
-     GROUP BY month, c.name, c.type
-     ORDER BY month DESC, c.type, total DESC`,
-    [from, to]
-  );
-  res.json(rows);
-});
+<main>
+  <div class="cards">
+    <div class="card">
+      <div class="label">Income</div>
+      <div class="value income" id="totalIncome">£0</div>
+    </div>
+    <div class="card">
+      <div class="label">Expenses</div>
+      <div class="value expense" id="totalExpense">£0</div>
+    </div>
+    <div class="card">
+      <div class="label">Net</div>
+      <div class="value" id="totalNet">£0</div>
+    </div>
+  </div>
 
-app.get('/api/summary', requireAuth, async (req, res) => {
-  const { from, to } = req.query;
-  const { rows } = await pool.query(
-    `SELECT c.name, c.type, SUM(t.amount) as total, COUNT(*) as txn_count
-     FROM transactions t
-     JOIN categories c ON c.id = t.category_id
-     WHERE t.txn_date BETWEEN $1 AND $2
-     GROUP BY c.name, c.type
-     ORDER BY c.type, total DESC`,
-    [from, to]
-  );
-  res.json(rows);
-});
+  <section>
+    <h2>By month</h2>
+    <div id="monthlyContainer"></div>
+  </section>
 
-// Transactions flagged for manual review
-app.get('/api/review', requireAuth, async (req, res) => {
-  const { rows } = await pool.query(
-    `SELECT t.*, c.name as category_name FROM transactions t
-     LEFT JOIN categories c ON c.id = t.category_id
-     WHERE t.needs_review = true
-     ORDER BY t.txn_date DESC`
-  );
-  res.json(rows);
-});
+  <section>
+    <h2>All categories (whole period)</h2>
+    <table id="summaryTable">
+      <thead><tr><th>Category</th><th style="text-align:right">Transactions</th><th style="text-align:right">Total</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
 
-// Manually fix a category
-app.post('/api/transactions/:id/category', requireAuth, async (req, res) => {
-  const { category_id } = req.body;
-  await pool.query(
-    `UPDATE transactions SET category_id = $1, categorized_by = 'manual', needs_review = false WHERE id = $2`,
-    [category_id, req.params.id]
-  );
-  res.json({ ok: true });
-});
+  <section>
+    <h2>Needs review <span class="badge" id="reviewCount">0</span></h2>
+    <table id="reviewTable">
+      <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Category</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
 
-app.get('/api/categories', requireAuth, async (req, res) => {
-  const { rows } = await pool.query(`SELECT * FROM categories ORDER BY type, name`);
-  res.json(rows);
-});
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const KEY = params.get('key') || '';
+  let CATEGORIES = [];
 
-app.get('/api/sync-log', requireAuth, async (req, res) => {
-  const { rows } = await pool.query(`SELECT * FROM sync_log ORDER BY ran_at DESC LIMIT 20`);
-  res.json(rows);
-});
+  function fmt(n) {
+    const num = Number(n);
+    return (num < 0 ? '-£' : '£') + Math.abs(num).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
 
-// Daily sync at 6am — catches yesterday's transactions plus anything that settled late
-cron.schedule('0 6 * * *', () => {
-  console.log('Running scheduled daily sync...');
-  exec('node server/sync.js', (err, stdout, stderr) => {
-    if (stdout) console.log(stdout);
-    if (stderr) console.error(stderr);
-  });
-});
+  async function api(path) {
+    const res = await fetch(path + (path.includes('?') ? '&' : '?') + 'key=' + KEY);
+    if (!res.ok) throw new Error('API error: ' + res.status);
+    return res.json();
+  }
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`SPS Finance running on port ${PORT}`));
+  async function loadCategories() {
+    CATEGORIES = await api('/api/categories');
+  }
+
+  function formatDateReadable(isoDate) {
+    const d = new Date(isoDate);
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  function monthLabel(monthStr) {
+    const [year, month] = monthStr.split('-');
+    const d = new Date(Number(year), Number(month) - 1, 1);
+    return d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+  }
+
+  async function loadMonthly() {
+    const from = document.getElementById('from').value;
+    const to = document.getElementById('to').value;
+    const rows = await api(`/api/monthly-summary?from=${from}&to=${to}`);
+
+    const container = document.getElementById('monthlyContainer');
+    container.innerHTML = '';
+
+    if (rows.length === 0) {
+      container.innerHTML = '<div class="empty">No categorised transactions in this range yet.</div>';
+      return;
+    }
+
+    // Group flat rows by month
+    const byMonth = {};
+    rows.forEach(r => {
+      if (!byMonth[r.month]) byMonth[r.month] = [];
+      byMonth[r.month].push(r);
+    });
+
+    const months = Object.keys(byMonth).sort().reverse();
+
+    months.forEach((month, idx) => {
+      const categoryRows = byMonth[month];
+      let income = 0, expense = 0;
+      categoryRows.forEach(r => {
+        const total = Number(r.total);
+        if (r.type === 'income') income += total;
+        if (r.type === 'expense') expense += Math.abs(total);
+      });
+
+      const block = document.createElement('div');
+      block.className = 'month-block' + (idx === 0 ? ' open' : ''); // most recent month starts open
+
+      const tableRows = categoryRows.map(r => {
+        const total = Number(r.total);
+        return `<tr><td>${r.name}</td><td style="text-align:right">${r.txn_count}</td>
+          <td class="amount ${total >= 0 ? 'pos' : 'neg'}">${fmt(total)}</td></tr>`;
+      }).join('');
+
+      block.innerHTML = `
+        <div class="month-header" onclick="this.parentElement.classList.toggle('open')">
+          <div class="month-title"><span class="chevron">▶</span> ${monthLabel(month)}</div>
+          <div class="month-totals">
+            <span><span class="lbl">In</span><span class="amount pos">${fmt(income)}</span></span>
+            <span><span class="lbl">Out</span><span class="amount neg">${fmt(expense)}</span></span>
+            <span><span class="lbl">Net</span><span class="amount ${income - expense >= 0 ? 'pos' : 'neg'}">${fmt(income - expense)}</span></span>
+          </div>
+        </div>
+        <div class="month-detail">
+          <table>
+            <thead><tr><th>Category</th><th style="text-align:right">Transactions</th><th style="text-align:right">Total</th></tr></thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+        </div>
+      `;
+      container.appendChild(block);
+    });
+  }
+
+  async function loadSummary() {
+    const from = document.getElementById('from').value;
+    const to = document.getElementById('to').value;
+
+    document.getElementById('periodBanner').textContent =
+      `Showing transactions from ${formatDateReadable(from)} to ${formatDateReadable(to)} — change the dates above and click Update to view a different period`;
+
+    const rows = await api(`/api/summary?from=${from}&to=${to}`);
+
+    let income = 0, expense = 0;
+    const tbody = document.querySelector('#summaryTable tbody');
+    tbody.innerHTML = '';
+
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="empty">No categorised transactions in this range yet.</td></tr>';
+    }
+
+    rows.forEach(r => {
+      const total = Number(r.total);
+      if (r.type === 'income') income += total;
+      if (r.type === 'expense') expense += Math.abs(total);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.name}</td><td style="text-align:right">${r.txn_count}</td>
+        <td class="amount ${total >= 0 ? 'pos' : 'neg'}">${fmt(total)}</td>`;
+      tbody.appendChild(tr);
+    });
+
+    document.getElementById('totalIncome').textContent = fmt(income);
+    document.getElementById('totalExpense').textContent = fmt(expense);
+    document.getElementById('totalNet').textContent = fmt(income - expense);
+  }
+
+  async function loadReview() {
+    const rows = await api('/api/review');
+    document.getElementById('reviewCount').textContent = rows.length;
+    const tbody = document.querySelector('#reviewTable tbody');
+    tbody.innerHTML = '';
+
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">Nothing needs review right now.</td></tr>';
+      return;
+    }
+
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      const options = CATEGORIES.map(c =>
+        `<option value="${c.id}" ${c.id === r.category_id ? 'selected' : ''}>${c.name}</option>`
+      ).join('');
+      tr.innerHTML = `
+        <td>${r.txn_date}</td>
+        <td>${r.description_raw}${r.category_confidence ? `<div class="conf">AI confidence: ${(r.category_confidence * 100).toFixed(0)}%</div>` : ''}</td>
+        <td class="amount ${r.amount >= 0 ? 'pos' : 'neg'}">${fmt(r.amount)}</td>
+        <td><select id="cat-${r.id}">${options}</select></td>
+        <td><button class="fix-btn" onclick="fixCategory(${r.id})">Confirm</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function fixCategory(txnId) {
+    const categoryId = document.getElementById(`cat-${txnId}`).value;
+    await fetch(`/api/transactions/${txnId}/category?key=${KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category_id: Number(categoryId) })
+    });
+    loadReview();
+  }
+
+  // Default range: tax year start to today
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('from').value = '2026-04-06';
+  document.getElementById('to').value = today;
+
+  (async () => {
+    await loadCategories();
+    await loadSummary();
+    await loadMonthly();
+    await loadReview();
+  })();
+</script>
+
+</body>
+</html>
