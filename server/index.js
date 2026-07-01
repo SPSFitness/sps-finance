@@ -58,13 +58,37 @@ app.get('/api/review', requireAuth, async (req, res) => {
   res.json(rows);
 });
 
-// Manually fix a category
+// Manually fix a category — optionally creates a rule so future matches skip the AI entirely,
+// and optionally applies the same fix to every other transaction with the same description.
 app.post('/api/transactions/:id/category', requireAuth, async (req, res) => {
-  const { category_id } = req.body;
+  const { category_id, create_rule, apply_to_similar } = req.body;
+
+  const { rows: txnRows } = await pool.query(`SELECT * FROM transactions WHERE id = $1`, [req.params.id]);
+  const txn = txnRows[0];
+  if (!txn) return res.status(404).json({ error: 'not found' });
+
   await pool.query(
     `UPDATE transactions SET category_id = $1, categorized_by = 'manual', needs_review = false WHERE id = $2`,
     [category_id, req.params.id]
   );
+
+  if (apply_to_similar && txn.description_raw) {
+    await pool.query(
+      `UPDATE transactions SET category_id = $1, categorized_by = 'manual', needs_review = false
+       WHERE description_raw = $2 AND id != $3`,
+      [category_id, txn.description_raw, req.params.id]
+    );
+  }
+
+  if (create_rule && txn.description_raw) {
+    // Priority 20 — checked after any hand-tuned rules (priority 5-10) but before the AI ever runs
+    await pool.query(
+      `INSERT INTO category_rules (category_id, match_type, match_value, priority)
+       VALUES ($1, 'description_contains', $2, 20)`,
+      [category_id, txn.description_raw.toLowerCase()]
+    );
+  }
+
   res.json({ ok: true });
 });
 
