@@ -787,21 +787,51 @@
       return;
     }
 
-    const rowsHtml = txns.map(t => `
+    const rowsHtml = txns.map(t => {
+      const options = CATEGORIES.map(c =>
+        `<option value="${c.id}" ${c.id === t.category_id ? 'selected' : ''}>${c.name}</option>`
+      ).join('');
+      return `
       <tr>
         <td>${t.txn_date}</td>
         <td>${t.description_raw}${t.merchant_name ? ` <span class="drill-merchant">(${t.merchant_name})</span>` : ''}</td>
         <td class="amount ${Number(t.amount) >= 0 ? 'pos' : 'neg'}">${fmt(t.amount)}</td>
         <td class="drill-source">${t.categorized_by}${t.starling_spending_category ? ` · ${t.starling_spending_category}` : ''}${t.category_confidence ? ` · ${(t.category_confidence*100).toFixed(0)}%` : ''}</td>
+        <td><select id="drill-cat-${t.id}" class="drill-select">${options}</select></td>
+        <td class="fix-options">
+          <label><input type="checkbox" id="drill-rule-${t.id}" checked> Remember</label>
+          <label><input type="checkbox" id="drill-similar-${t.id}"> Apply to matching</label>
+        </td>
+        <td><button class="fix-btn" onclick="fixDrilldownCategory(${t.id})">Save</button></td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
 
     content.innerHTML = `
       <table class="drilldown-table">
-        <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Source</th></tr></thead>
+        <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Source</th><th>Category</th><th>Options</th><th></th></tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
     `;
+  }
+
+  async function fixDrilldownCategory(txnId) {
+    const categoryId = document.getElementById(`drill-cat-${txnId}`).value;
+    const createRule = document.getElementById(`drill-rule-${txnId}`).checked;
+    const applyToSimilar = document.getElementById(`drill-similar-${txnId}`).checked;
+
+    await fetch(`/api/transactions/${txnId}/category?key=${KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category_id: Number(categoryId), create_rule: createRule, apply_to_similar: applyToSimilar })
+    });
+
+    // Category totals everywhere have now shifted — refresh the whole dashboard rather than
+    // leave stale numbers showing. The drilldown itself closes since its total is now wrong.
+    await loadSummary();
+    await loadMonthly();
+    await loadReview();
+    await loadVatCheck();
   }
 
   async function fixCategory(txnId) {
