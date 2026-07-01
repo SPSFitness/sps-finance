@@ -1,0 +1,20 @@
+{
+  "name": "sps-finance",
+  "version": "1.0.0",
+  "description": "SPS Fitness — transaction sync, categorisation, and reporting",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/index.js",
+    "backfill": "node server/backfill.js",
+    "recategorize": "node server/recategorize.js",
+    "sync": "node server/sync.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3"
+  }
+}
