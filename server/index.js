@@ -16,7 +16,34 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// Monthly breakdown — income/expense/net per month, plus category detail within each month
+// VAT threshold check — always the true rolling 12 months from today, independent of
+// whatever date range the dashboard is currently showing. This is what HMRC actually checks.
+app.get('/api/vat-check', requireAuth, async (req, res) => {
+  const to = new Date().toISOString().slice(0, 10);
+  const fromDate = new Date();
+  fromDate.setFullYear(fromDate.getFullYear() - 1);
+  const from = fromDate.toISOString().slice(0, 10);
+
+  const { rows } = await pool.query(
+    `SELECT COALESCE(SUM(t.amount), 0) as total
+     FROM transactions t
+     JOIN categories c ON c.id = t.category_id
+     WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
+       AND t.txn_date BETWEEN $1 AND $2`,
+    [from, to]
+  );
+
+  const threshold = 90000; // UK VAT registration threshold, correct as of April 2026 tax year
+  const total = Number(rows[0].total);
+  res.json({
+    rollingTotal: total,
+    threshold,
+    remaining: threshold - total,
+    periodFrom: from,
+    periodTo: to
+  });
+});
+
 app.get('/api/monthly-summary', requireAuth, async (req, res) => {
   const { from, to } = req.query;
   const { rows } = await pool.query(
