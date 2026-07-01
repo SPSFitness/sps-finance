@@ -58,6 +58,15 @@ app.get('/api/review', requireAuth, async (req, res) => {
   res.json(rows);
 });
 
+// Accept every transaction currently in the review queue as-is (whatever category it currently
+// shows, whether AI-guessed or rule-matched) — clears the queue in one go.
+app.post('/api/review/accept-all', requireAuth, async (req, res) => {
+  const result = await pool.query(
+    `UPDATE transactions SET needs_review = false WHERE needs_review = true RETURNING id`
+  );
+  res.json({ ok: true, cleared: result.rows.length });
+});
+
 // Manually fix a category — optionally creates a rule so future matches skip the AI entirely,
 // and optionally applies the same fix to every other transaction with the same description.
 app.post('/api/transactions/:id/category', requireAuth, async (req, res) => {

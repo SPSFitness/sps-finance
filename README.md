@@ -4,12 +4,40 @@ Replaces QuickBooks day-to-day: pulls Starling transactions automatically, categ
 against your actual business (memberships, PT, retreats, clothing store, freelance work),
 flags anything uncertain for your review, gives you a live P&L-style dashboard.
 
+## IMPORTANT — exact file locations
+
+When uploading to GitHub, files MUST go in these exact folders, not loose at the top level:
+
+```
+sps-finance/
+├── db/
+│   ├── schema.sql
+│   └── fix_rules.sql
+├── public/
+│   └── index.html          <- the dashboard, NOT at the top level
+├── server/
+│   ├── index.js             <- the running server, NOT at the top level
+│   ├── backfill.js
+│   ├── categorize.js
+│   ├── db.js
+│   ├── ingest.js
+│   ├── recategorize.js
+│   ├── starling.js
+│   └── sync.js
+├── .env.example
+├── package.json
+└── README.md
+```
+
+If `index.html` or `index.js` end up sitting loose at the repo's top level instead of inside
+`public/` or `server/`, the app will not use them — it only reads from those exact folders.
+Delete any stray top-level copies if you see them in your repo.
+
 Does **not** submit PAYE — that stays on HMRC Basic PAYE Tools as agreed. This is purely the
 bookkeeping side.
 
 Uses Starling's own developer API directly (Personal Access Token) — no TrueLayer, no
-Open Banking aggregator, no production approval wait. You already have your token if you're
-reading this after setup.
+Open Banking aggregator, no production approval wait.
 
 ## What's already done (as of this build)
 
@@ -46,19 +74,19 @@ deploy from the Render dashboard.
 
 ### 3. Run the database schema update
 
-The `accounts` table structure changed slightly (no more OAuth tokens stored, just Starling's
-account and category IDs). If you already ran the old schema, run this against your database:
+If this is a brand new database, run the whole schema plus the accuracy fixes:
 
-```sql
-ALTER TABLE accounts DROP COLUMN IF EXISTS access_token;
-ALTER TABLE accounts DROP COLUMN IF EXISTS refresh_token;
-ALTER TABLE accounts DROP COLUMN IF EXISTS token_expires_at;
-ALTER TABLE accounts ADD COLUMN IF NOT EXISTS starling_category_uid TEXT;
-ALTER TABLE accounts ALTER COLUMN provider SET DEFAULT 'starling';
+```
+psql "YOUR_DATABASE_URL" -f db/schema.sql
+psql "YOUR_DATABASE_URL" -f db/fix_rules.sql
 ```
 
-If this is a fresh database that never ran the old schema, just run the whole `db/schema.sql`
-file as normal — no changes needed on your end.
+`fix_rules.sql` adds rules that stop common personal-spend merchants (Tesco, Costa, Uber Eats
+etc) and recurring business terms ("Sessions", "STRIPE", "PAYOUT") from being mis-guessed by
+the AI — these get matched instantly and correctly every time instead.
+
+If you already have an existing database from an earlier version, just run whichever of the
+two files you haven't run yet — both are safe to re-run, they skip anything already present.
 
 ### 4. Run the backfill
 

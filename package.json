@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server/index.js",
     "backfill": "node server/backfill.js",
+    "recategorize": "node server/recategorize.js",
     "sync": "node server/sync.js"
   },
   "dependencies": {
