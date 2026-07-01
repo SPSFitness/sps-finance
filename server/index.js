@@ -79,7 +79,7 @@ app.get('/api/summary', requireAuth, async (req, res) => {
 app.get('/api/transactions-by-category', requireAuth, async (req, res) => {
   const { category_id, from, to } = req.query;
   const { rows } = await pool.query(
-    `SELECT id, txn_date, description_raw, merchant_name, amount, categorized_by, category_confidence, starling_spending_category
+    `SELECT id, txn_date, description_raw, merchant_name, amount, category_id, categorized_by, category_confidence, starling_spending_category
      FROM transactions
      WHERE category_id = $1 AND txn_date BETWEEN $2 AND $3
      ORDER BY txn_date DESC`,
