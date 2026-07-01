@@ -192,6 +192,19 @@
   .fix-options input {
     margin-right: 4px;
   }
+  .accept-all-btn {
+    background: white;
+    color: var(--expense);
+    border: 1px solid var(--expense);
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .accept-all-btn:hover {
+    background: #fef2f2;
+  }
   .month-block {
     border-bottom: 1px solid var(--border);
   }
@@ -284,7 +297,9 @@
   </section>
 
   <section>
-    <h2>Needs review <span class="badge" id="reviewCount">0</span></h2>
+    <h2><span>Needs review <span class="badge" id="reviewCount">0</span></span>
+      <button class="accept-all-btn" onclick="acceptAll()">Accept all as shown</button>
+    </h2>
     <table id="reviewTable">
       <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Category</th><th>Options</th><th></th></tr></thead>
       <tbody></tbody>
@@ -444,6 +459,17 @@
       `;
       tbody.appendChild(tr);
     });
+  }
+
+  async function acceptAll() {
+    const confirmed = confirm('Accept every transaction in the review queue using its currently shown category? This does not create rules — mislabelled ones will need fixing individually if you spot them later.');
+    if (!confirmed) return;
+    const res = await fetch(`/api/review/accept-all?key=${KEY}`, { method: 'POST' });
+    const data = await res.json();
+    alert(`Cleared ${data.cleared} transaction(s).`);
+    loadReview();
+    loadSummary();
+    loadMonthly();
   }
 
   async function fixCategory(txnId) {
