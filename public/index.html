@@ -284,6 +284,45 @@
   .fix-options input {
     margin-right: 4px;
   }
+  .drillable {
+    cursor: pointer;
+  }
+  .drillable:hover .drill-hint {
+    color: var(--blue);
+  }
+  .drill-hint {
+    font-size: 11px;
+    color: #c7cbd1;
+    font-weight: 500;
+  }
+  .drilldown-row td {
+    background: #fafbfc;
+    padding: 0 !important;
+  }
+  .drilldown-content {
+    padding: 10px 20px 14px 32px;
+  }
+  .drilldown-table {
+    width: 100%;
+    font-size: 12px;
+  }
+  .drilldown-table th {
+    padding: 4px 10px;
+    font-size: 10px;
+  }
+  .drilldown-table td {
+    padding: 5px 10px;
+    border-bottom: 1px solid #eee;
+  }
+  .drill-merchant {
+    color: var(--grey);
+    font-size: 11px;
+  }
+  .drill-source {
+    font-size: 11px;
+    color: var(--grey);
+    text-transform: capitalize;
+  }
   .accept-all-btn {
     background: white;
     color: var(--expense);
@@ -490,10 +529,17 @@
       const block = document.createElement('div');
       block.className = 'month-block' + (idx === 0 ? ' open' : ''); // most recent month starts open
 
-      const tableRows = categoryRows.map(r => {
+      const [yr, mo] = month.split('-').map(Number);
+      const monthStart = `${month}-01`;
+      const monthEnd = toISODate(new Date(yr, mo, 0)); // day 0 of next month = last day of this month
+
+      const tableRows = categoryRows.map((r, catIdx) => {
         const total = Number(r.total);
-        return `<tr><td>${r.name}</td><td style="text-align:right">${r.txn_count}</td>
-          <td class="amount ${total >= 0 ? 'pos' : 'neg'}">${fmt(total)}</td></tr>`;
+        const rowId = `month-drill-${month}-${catIdx}`;
+        return `<tr><td><span class="drillable" onclick="toggleDrilldown('${rowId}', ${r.category_id}, '${monthStart}', '${monthEnd}')">${r.name} <span class="drill-hint">▸ view transactions</span></span></td>
+          <td style="text-align:right">${r.txn_count}</td>
+          <td class="amount ${total >= 0 ? 'pos' : 'neg'}">${fmt(total)}</td></tr>
+          <tr id="${rowId}" class="drilldown-row" style="display:none"><td colspan="3"><div class="drilldown-content">Loading...</div></td></tr>`;
       }).join('');
 
       block.innerHTML = `
@@ -606,14 +652,23 @@
       tbody.innerHTML = '<tr><td colspan="3" class="empty">No categorised transactions in this range yet.</td></tr>';
     }
 
-    rows.forEach(r => {
+    rows.forEach((r, idx) => {
       const total = Number(r.total);
       if (r.type === 'income') income += total;
       if (r.type === 'expense') expense += Math.abs(total);
+      const rowId = `summary-drill-${idx}`;
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${r.name}</td><td style="text-align:right">${r.txn_count}</td>
+      tr.innerHTML = `<td><span class="drillable" onclick="toggleDrilldown('${rowId}', ${r.category_id}, '${from}', '${to}')">${r.name} <span class="drill-hint">▸ view transactions</span></span></td>
+        <td style="text-align:right">${r.txn_count}</td>
         <td class="amount ${total >= 0 ? 'pos' : 'neg'}">${fmt(total)}</td>`;
       tbody.appendChild(tr);
+
+      const detailTr = document.createElement('tr');
+      detailTr.id = rowId;
+      detailTr.className = 'drilldown-row';
+      detailTr.style.display = 'none';
+      detailTr.innerHTML = `<td colspan="3"><div class="drilldown-content">Loading...</div></td>`;
+      tbody.appendChild(detailTr);
     });
 
     document.getElementById('totalIncome').textContent = fmt(income);
@@ -710,6 +765,43 @@
     loadReview();
     loadSummary();
     loadMonthly();
+  }
+
+  async function toggleDrilldown(rowId, categoryId, from, to) {
+    const row = document.getElementById(rowId);
+    if (!row) return;
+
+    if (row.style.display !== 'none') {
+      row.style.display = 'none';
+      return;
+    }
+    row.style.display = '';
+
+    const content = row.querySelector('.drilldown-content');
+    content.textContent = 'Loading...';
+
+    const txns = await api(`/api/transactions-by-category?category_id=${categoryId}&from=${from}&to=${to}`);
+
+    if (txns.length === 0) {
+      content.innerHTML = '<div class="empty">No transactions found.</div>';
+      return;
+    }
+
+    const rowsHtml = txns.map(t => `
+      <tr>
+        <td>${t.txn_date}</td>
+        <td>${t.description_raw}${t.merchant_name ? ` <span class="drill-merchant">(${t.merchant_name})</span>` : ''}</td>
+        <td class="amount ${Number(t.amount) >= 0 ? 'pos' : 'neg'}">${fmt(t.amount)}</td>
+        <td class="drill-source">${t.categorized_by}${t.starling_spending_category ? ` · ${t.starling_spending_category}` : ''}${t.category_confidence ? ` · ${(t.category_confidence*100).toFixed(0)}%` : ''}</td>
+      </tr>
+    `).join('');
+
+    content.innerHTML = `
+      <table class="drilldown-table">
+        <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Source</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    `;
   }
 
   async function fixCategory(txnId) {
