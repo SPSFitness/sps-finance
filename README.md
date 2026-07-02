@@ -147,3 +147,28 @@ Lower priority number = checked first.
 - Make sure your accountant is happy with the category groupings — tweak names in the
   `categories` table if needed
 - Keep QuickBooks running in parallel for one full month as a sanity check before cancelling it
+
+## Fixing the daily sync properly (important)
+
+The free Render web service tier spins down after periods of inactivity. The sync scheduled
+inside the app (6am daily) only fires if the server happens to already be awake at that moment
+— on a free tier with light traffic, it often won't be, so transactions silently stop updating
+without any error being shown anywhere.
+
+**Two ways to fix this — do at least one:**
+
+**Option A — Use the "Sync Now" button** (manual, but works immediately, no extra setup)
+On the dashboard, click "🔄 Sync Now" whenever you want fresh data. Takes a few seconds.
+
+**Option B — Set up a proper Render Cron Job** (automatic, the real fix)
+1. Render dashboard → your Finances project → **New** → **Cron Job**
+2. Connect the same GitHub repo
+3. **Command**: `node server/sync.js`
+4. **Schedule**: `0 6 * * *` (6am daily, in cron syntax)
+5. Add the same environment variables as your web service (`DATABASE_URL`, `STARLING_ACCESS_TOKEN`,
+   `ANTHROPIC_API_KEY`, `APP_SECRET`) — Cron Jobs run as a separate process and don't share the
+   web service's environment automatically
+6. Create it
+
+This runs as an independent scheduled task on Render's infrastructure, completely separate from
+whether your web service is awake or asleep — this is the reliable long-term fix.

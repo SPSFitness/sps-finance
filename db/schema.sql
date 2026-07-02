@@ -40,8 +40,9 @@ CREATE TABLE IF NOT EXISTS transactions (
     description_raw     TEXT NOT NULL,             -- as it comes from the bank
     merchant_name        TEXT,
     category_id         INTEGER REFERENCES categories(id),
-    categorized_by      TEXT CHECK (categorized_by IN ('rule', 'ai', 'manual', NULL)),
+    categorized_by      TEXT CHECK (categorized_by IN ('rule', 'ai', 'manual', 'starling', NULL)),
     category_confidence NUMERIC(3,2),              -- 0.00–1.00, only set when categorized_by = 'ai'
+    starling_spending_category TEXT,                -- Starling's own category tag (STAFF, REVENUE, WORKPLACE, etc)
     needs_review        BOOLEAN NOT NULL DEFAULT false,
     notes               TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -24,14 +24,41 @@ async function tryRules(txn) {
   return null;
 }
 
-// Fallback: ask Claude to pick from the actual category list, with the transaction's own context
-// plus real examples of how similar transactions have been manually corrected before.
+// Starling assigns its own spending category to every transaction, straight from the card
+// network / payment rails — not a guess. Where the mapping to your categories is unambiguous,
+// use it directly: instant, free, and more reliable than the AI guessing off a vague description.
+// Deliberately left out anything genuinely ambiguous for your business (REVENUE could be
+// membership, PT, clothing, or Stripe; VAT/TRAVEL/VEHICLES/BUSINESS_ENTERTAINMENT could be
+// personal or business) — those still go through the AI, just with this tag as extra context.
+const STARLING_CATEGORY_MAP = {
+  STAFF: 'Wages & PAYE',
+  PAYE_AND_NI: 'Wages & PAYE',
+  WORKPLACE: 'Rent & Utilities',
+  MARKETING: 'Marketing & Ads',
+  PHONE_AND_INTERNET: 'Software & Subscriptions',
+  PROFESSIONAL_SERVICES: 'Software & Subscriptions',
+  EQUIPMENT: 'Equipment & Gym Kit',
+  REPAIRS_AND_MAINTENANCE: 'Equipment & Gym Kit',
+  BANK_CHARGES: 'Bank Fees & Charges',
+  FOOD_AND_DRINK: 'Owner Drawings',
+  LOAN_PRINCIPAL: 'Transfer Between Accounts'
+};
+
+async function tryStarlingCategory(txn) {
+  if (!txn.starling_spending_category) return null;
+  const targetName = STARLING_CATEGORY_MAP[txn.starling_spending_category];
+  if (!targetName) return null;
+
+  const { rows } = await pool.query(`SELECT id FROM categories WHERE name = $1`, [targetName]);
+  return rows[0] ? rows[0].id : null;
+}
+
+// Fallback: ask Claude to pick from the actual category list, with the transaction's own context,
+// Starling's own category tag (where present), plus real examples of past manual corrections.
 async function tryAI(txn) {
   const { rows: categories } = await pool.query(`SELECT id, name, type FROM categories`);
   const categoryList = categories.map(c => `${c.id}: ${c.name} (${c.type})`).join('\n');
 
-  // Real examples of past manual corrections — this teaches the AI the owner's actual
-  // judgement instead of guessing generically every time.
   const { rows: examples } = await pool.query(
     `SELECT t.description_raw, t.merchant_name, t.amount, c.name as category_name
      FROM transactions t
@@ -52,6 +79,7 @@ Description: ${txn.description_raw}
 Merchant: ${txn.merchant_name || 'unknown'}
 Amount: ${txn.amount > 0 ? '+' : ''}${txn.amount} GBP (positive = money in, negative = money out)
 Date: ${txn.txn_date}
+Starling's own spending category tag: ${txn.starling_spending_category || 'none provided'}
 
 Categories available:
 ${categoryList}
@@ -62,9 +90,10 @@ ${exampleText}
 
 Important: many bank descriptions are meaningless reference codes or generic labels (random
 alphanumeric strings, "Sessions", "Payment") that carry no real signal about what the transaction
-actually was. If the description gives you nothing concrete and there's no similar example above,
-use LOW confidence (0.3 or below) rather than confidently guessing — an honest low-confidence flag
-is more useful than a wrong high-confidence guess.
+actually was. If Starling's own category tag is present, weight it heavily too — it comes from
+the card network, not a guess. If neither the description nor the Starling tag gives you anything
+concrete, and there's no similar example above, use LOW confidence (0.3 or below) rather than
+confidently guessing.
 
 Reply ONLY with JSON, no other text: {"category_id": <number>, "confidence": <0.0-1.0>}`;
 
@@ -97,6 +126,15 @@ async function categorizeTransaction(txnId) {
     await pool.query(
       `UPDATE transactions SET category_id = $1, categorized_by = 'rule', needs_review = false WHERE id = $2`,
       [ruleMatch, txnId]
+    );
+    return;
+  }
+
+  const starlingMatch = await tryStarlingCategory(txn);
+  if (starlingMatch) {
+    await pool.query(
+      `UPDATE transactions SET category_id = $1, categorized_by = 'starling', needs_review = false WHERE id = $2`,
+      [starlingMatch, txnId]
     );
     return;
   }

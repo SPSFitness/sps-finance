@@ -21,10 +21,11 @@ async function ingestForAccount(account, from, to, syncType) {
       const description = item.reference || item.counterPartyName || '';
 
       const result = await pool.query(
-        `INSERT INTO transactions (account_id, provider_txn_id, txn_date, amount, currency, description_raw, merchant_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (account_id, provider_txn_id) DO NOTHING
-         RETURNING id`,
+        `INSERT INTO transactions (account_id, provider_txn_id, txn_date, amount, currency, description_raw, merchant_name, starling_spending_category)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (account_id, provider_txn_id) DO UPDATE
+         SET starling_spending_category = $8
+         RETURNING id, (xmax = 0) as is_new`,
         [
           account.id,
           item.feedItemUid,
@@ -32,10 +33,11 @@ async function ingestForAccount(account, from, to, syncType) {
           amount,
           item.amount.currency,
           description,
-          item.counterPartyName || null
+          item.counterPartyName || null,
+          item.spendingCategory || null
         ]
       );
-      if (result.rows.length > 0) {
+      if (result.rows.length > 0 && result.rows[0].is_new) {
         inserted++;
         await categorizeTransaction(result.rows[0].id);
       }
