@@ -74,6 +74,14 @@
     font-weight: 600;
     cursor: pointer;
   }
+  .paye-link {
+    color: var(--teal);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    margin-right: 8px;
+    align-self: center;
+  }
   .period-banner {
     background: #eef2ff;
     border-bottom: 1px solid var(--border);
@@ -103,6 +111,11 @@
   .presets button:hover {
     border-color: var(--blue);
     color: var(--blue);
+  }
+  .preset-divider {
+    width: 1px;
+    background: var(--border);
+    margin: 0 4px;
   }
   .vat-card {
     background: var(--card);
@@ -384,6 +397,7 @@
 <header>
   <h1>SPS <span>Finance</span></h1>
   <div class="date-controls">
+    <a href="#" onclick="window.open('/paye.html?key=' + KEY, '_blank'); return false;" class="paye-link">PAYE Calculator</a>
     <div class="date-field">
       <label for="from">From</label>
       <input type="date" id="from">
@@ -400,6 +414,11 @@
   <button onclick="setPreset('ytd')">Tax Year to Date</button>
   <button onclick="setPreset('month')">This Month</button>
   <button onclick="setPreset('rolling12')">Rolling 12 Months</button>
+  <span class="preset-divider"></span>
+  <button onclick="openReport('profit-loss')">📄 Profit & Loss (PDF)</button>
+  <button onclick="openReport('transactions-csv')">📊 Export Transactions (CSV)</button>
+  <span class="preset-divider"></span>
+  <button onclick="syncNow()" id="syncBtn">🔄 Sync Now</button>
 </div>
 
 <div class="period-banner" id="periodBanner"></div>
@@ -844,6 +863,33 @@
       body: JSON.stringify({ category_id: Number(categoryId), create_rule: createRule, apply_to_similar: applyToSimilar })
     });
     loadReview();
+  }
+
+  async function syncNow() {
+    const btn = document.getElementById('syncBtn');
+    btn.disabled = true;
+    btn.textContent = '🔄 Syncing...';
+    try {
+      const res = await fetch(`/api/sync-now?key=${KEY}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        const totalNew = data.results.reduce((s, r) => s + (r.inserted || 0), 0);
+        alert(`Sync complete. ${totalNew} new transaction(s) found and categorised.`);
+        loadSummary(); loadMonthly(); loadReview(); loadVatCheck();
+      } else {
+        alert('Sync failed: ' + data.error);
+      }
+    } catch (err) {
+      alert('Sync failed: ' + err.message);
+    }
+    btn.disabled = false;
+    btn.textContent = '🔄 Sync Now';
+  }
+
+  function openReport(kind) {
+    const from = document.getElementById('from').value;
+    const to = document.getElementById('to').value;
+    window.open(`/report/${kind}?from=${from}&to=${to}&key=${KEY}`, '_blank');
   }
 
   function toISODate(d) { return d.toISOString().slice(0, 10); }
