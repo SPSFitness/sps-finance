@@ -81,6 +81,10 @@
         <input type="text" id="employeeName" placeholder="e.g. Emily">
       </div>
       <div class="field">
+        <label>National Insurance number</label>
+        <input type="text" id="niNumber" placeholder="e.g. QQ123456C" style="text-transform:uppercase">
+      </div>
+      <div class="field">
         <label>Pay period end date</label>
         <input type="date" id="payPeriodEnd">
       </div>
@@ -160,7 +164,7 @@
   <div class="card">
     <h2>Payslip history</h2>
     <table id="historyTable">
-      <thead><tr><th>Period</th><th>Employee</th><th style="text-align:right">Gross</th><th style="text-align:right">Tax</th><th style="text-align:right">Employee NI</th><th style="text-align:right">Student Loan</th><th style="text-align:right">Net Pay</th><th style="text-align:right">Employer NI</th><th style="text-align:right">Total Cost</th></tr></thead>
+      <thead><tr><th>Period</th><th>Employee</th><th>NI Number</th><th style="text-align:right">Gross</th><th style="text-align:right">Tax</th><th style="text-align:right">Employee NI</th><th style="text-align:right">Student Loan</th><th style="text-align:right">Net Pay</th><th style="text-align:right">Employer NI</th><th style="text-align:right">Total Cost</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -272,11 +276,12 @@
     document.getElementById('results').style.display = 'block';
 
     const employeeName = document.getElementById('employeeName').value || 'Unnamed employee';
+    const niNumber = document.getElementById('niNumber').value.toUpperCase();
     const payPeriodEnd = document.getElementById('payPeriodEnd').value;
     document.getElementById('printSub').textContent =
-      `${employeeName} · Pay period ending ${payPeriodEnd || '(not set)'} · Tax code ${taxCode} · NI category ${niCategory}`;
+      `${employeeName}${niNumber ? ' · NI: ' + niNumber : ''} · Pay period ending ${payPeriodEnd || '(not set)'} · Tax code ${taxCode} · NI category ${niCategory}`;
 
-    lastResult = { gross, tax, ni, employerNi, sl, net, taxCode, niCategory, slPlan };
+    lastResult = { gross, tax, ni, employerNi, sl, net, taxCode, niCategory, slPlan, niNumber };
   }
 
   async function savePayslip() {
@@ -292,6 +297,7 @@
         pay_period_end: payPeriodEnd,
         tax_code: lastResult.taxCode,
         ni_category: lastResult.niCategory,
+        ni_number: lastResult.niNumber,
         student_loan_plan: lastResult.slPlan,
         gross_pay: lastResult.gross,
         income_tax: lastResult.tax,
@@ -305,14 +311,18 @@
     loadHistory();
   }
 
+  let historyData = [];
+
   async function loadHistory() {
     const res = await fetch(`/api/payslips?key=${KEY}`);
     const rows = await res.json();
+    historyData = rows;
     const tbody = document.querySelector('#historyTable tbody');
-    tbody.innerHTML = rows.map(r => `
+    tbody.innerHTML = rows.map((r, idx) => `
       <tr>
         <td>${r.pay_period_end}</td>
         <td>${r.employee_name}</td>
+        <td style="font-size:11px; color:#6b7280;">${r.ni_number || '—'}</td>
         <td style="text-align:right">${fmt(r.gross_pay)}</td>
         <td style="text-align:right">${fmt(r.income_tax)}</td>
         <td style="text-align:right">${fmt(r.employee_ni)}</td>
@@ -320,8 +330,29 @@
         <td style="text-align:right; font-weight:700">${fmt(r.net_pay)}</td>
         <td style="text-align:right">${fmt(r.employer_ni)}</td>
         <td style="text-align:right; font-weight:700">${fmt(Number(r.gross_pay) + Number(r.employer_ni))}</td>
+        <td><button class="print-btn" style="padding:5px 10px; font-size:11px; margin:0;" onclick="recallPayslip(${idx})">View / Print</button></td>
       </tr>
-    `).join('') || '<tr><td colspan="9" style="color:#6b7280">No payslips saved yet.</td></tr>';
+    `).join('') || '<tr><td colspan="11" style="color:#6b7280">No payslips saved yet.</td></tr>';
+  }
+
+  // Loads a historical payslip back into the results/print view, exactly as if it had just
+  // been calculated — lets you reprint any old payslip on demand.
+  function recallPayslip(idx) {
+    const r = historyData[idx];
+    document.getElementById('rGross').textContent = fmt(r.gross_pay);
+    document.getElementById('rDeductions').textContent = fmt(Number(r.income_tax) + Number(r.employee_ni) + Number(r.student_loan));
+    document.getElementById('rNet').textContent = fmt(r.net_pay);
+    document.getElementById('bGross').textContent = fmt(r.gross_pay);
+    document.getElementById('bTax').textContent = fmt(r.income_tax);
+    document.getElementById('bNi').textContent = fmt(r.employee_ni);
+    document.getElementById('bSl').textContent = fmt(r.student_loan);
+    document.getElementById('bNet').textContent = fmt(r.net_pay);
+    document.getElementById('bEmployerNi').textContent = fmt(r.employer_ni);
+    document.getElementById('bTotalCost').textContent = fmt(Number(r.gross_pay) + Number(r.employer_ni));
+    document.getElementById('printSub').textContent =
+      `${r.employee_name}${r.ni_number ? ' · NI: ' + r.ni_number : ''} · Pay period ending ${r.pay_period_end} · Tax code ${r.tax_code} · NI category ${r.ni_category} · (recalled from history)`;
+    document.getElementById('results').style.display = 'block';
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
   }
 
   loadHistory();

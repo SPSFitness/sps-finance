@@ -172,3 +172,51 @@ On the dashboard, click "🔄 Sync Now" whenever you want fresh data. Takes a fe
 
 This runs as an independent scheduled task on Render's infrastructure, completely separate from
 whether your web service is awake or asleep — this is the reliable long-term fix.
+
+## GoTeamUp integration (added later in the build)
+
+Automatically pulls genuinely paid invoice line items from GoTeamUp's own API — a more
+accurate source for VAT taxable turnover than bank deposits, since bank data is net of
+processing fees and lags behind when the sale actually happened.
+
+### Setup
+
+1. In GoTeamUp: **Settings → Integrations → API Integration** → create an application →
+   generate an **M2M Token** (Full Access). Copy it immediately, it's not shown again.
+2. Add to `.env`: `GOTEAMUP_API_TOKEN=your-token-here`
+3. Run the migration: `psql "YOUR_DB_URL" -f db/add_gtu_payments.sql`
+4. Run the sync: `node server/sync_goteamup.js`
+
+Important: GoTeamUp's API requires the header `Authorization: Token <token>` — NOT
+`Bearer <token>`, despite what generic code samples on their docs site show. Using the
+wrong prefix fails with a generic "expired or invalid" error that looks identical to an
+actually-bad token, which cost real time to track down.
+
+The sync automatically filters out Open/Voided/Upcoming Skipped invoice lines and only
+keeps genuinely paid ones — the raw API feed includes a lot of £0.00 noise that isn't real
+income. Re-running the sync is always safe; duplicates are skipped via `ON CONFLICT DO NOTHING`.
+
+### Known limitation
+
+GoTeamUp only holds data from when you actually started using it (December 2025 for SPS).
+Earlier months (July–November 2025) are reconstructed from bank deposits instead — these
+are flagged with `category = 'reconstruction'` in the `gtu_payments` table and are estimates,
+not verified charge data.
+
+## PAYE Calculator
+
+Located at `/paye.html`. Calculates income tax, employee NI, student loan deductions, and
+employer NI for a given gross pay amount, tax code, and NI category — built for 2026/27 tax
+year rates. Correctly validated for tax code 1257L and NI category A against a real QuickBooks
+payroll calculation (matched to the penny once the employer NI secondary threshold was corrected
+to £417/month). Other NI categories (B, C, H, M) use simplified logic and should be
+double-checked against HMRC's own calculator before relying on them.
+
+Includes:
+- Manual gross pay entry each period (since pay varies)
+- National Insurance number field, saved with each payslip
+- Payslip history with **View / Print** to recall and reprint any past payslip
+- Print / Save as PDF button producing a clean payslip document
+
+Run `psql "YOUR_DB_URL" -f db/add_payslips.sql` then `db/add_ni_number.sql` to set up the
+required tables if starting fresh.

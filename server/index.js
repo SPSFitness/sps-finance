@@ -356,14 +356,14 @@ app.get('/report/transactions-csv', async (req, res) => {
 
 // Save a calculated payslip for record-keeping
 app.post('/api/payslips', requireAuth, async (req, res) => {
-  const { employee_name, pay_period_end, tax_code, ni_category, student_loan_plan,
+  const { employee_name, pay_period_end, tax_code, ni_category, ni_number, student_loan_plan,
           gross_pay, income_tax, employee_ni, employer_ni, student_loan, net_pay } = req.body;
 
   const { rows } = await pool.query(
-    `INSERT INTO payslips (employee_name, pay_period_end, tax_code, ni_category, student_loan_plan,
+    `INSERT INTO payslips (employee_name, pay_period_end, tax_code, ni_category, ni_number, student_loan_plan,
        gross_pay, income_tax, employee_ni, employer_ni, student_loan, net_pay)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-    [employee_name, pay_period_end, tax_code, ni_category, student_loan_plan,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+    [employee_name, pay_period_end, tax_code, ni_category, ni_number, student_loan_plan,
      gross_pay, income_tax, employee_ni, employer_ni, student_loan, net_pay]
   );
   res.json({ ok: true, id: rows[0].id });

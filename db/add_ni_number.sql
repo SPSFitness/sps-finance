@@ -1,0 +1,1 @@
+ALTER TABLE payslips ADD COLUMN IF NOT EXISTS ni_number TEXT;
