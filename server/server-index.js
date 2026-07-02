@@ -70,7 +70,8 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
      FROM transactions t
      JOIN categories c ON c.id = t.category_id
      WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
-       AND t.txn_date >= (CURRENT_DATE - INTERVAL '15 months')
+       AND t.txn_date >= (CURRENT_DATE - INTERVAL '16 months')
+       AND date_trunc('month', t.txn_date) < date_trunc('month', CURRENT_DATE)
      GROUP BY month
      ORDER BY month ASC`
   );
