@@ -38,6 +38,10 @@
   .breakdown { margin-top: 20px; font-size: 13px; }
   .breakdown-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
   .breakdown-row:last-child { border-bottom: none; font-weight: 700; }
+  .breakdown-heading {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--grey);
+    font-weight: 700; margin-top: 22px; margin-bottom: 4px;
+  }
   .save-btn {
     background: white; border: 1px solid var(--income); color: var(--income); padding: 10px 20px;
     border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 16px;
@@ -120,16 +124,27 @@
       <div class="result-grid">
         <div class="result-box"><div class="lbl">Gross Pay</div><div class="val" id="rGross">£0</div></div>
         <div class="result-box"><div class="lbl">Total Deductions</div><div class="val" id="rDeductions">£0</div></div>
-        <div class="result-box net"><div class="lbl">Net Pay</div><div class="val" id="rNet">£0</div></div>
+        <div class="result-box net"><div class="lbl">Net Pay (take-home)</div><div class="val" id="rNet">£0</div></div>
       </div>
+
+      <div class="breakdown-heading">Deducted from employee</div>
       <div class="breakdown">
+        <div class="breakdown-row"><span>Gross Pay</span><span id="bGross">£0</span></div>
         <div class="breakdown-row"><span>Income Tax</span><span id="bTax">£0</span></div>
         <div class="breakdown-row"><span>Employee National Insurance</span><span id="bNi">£0</span></div>
         <div class="breakdown-row"><span>Student Loan Repayment</span><span id="bSl">£0</span></div>
-        <div class="breakdown-row"><span>Net Pay</span><span id="bNet">£0</span></div>
+        <div class="breakdown-row"><span>Net Pay (take-home)</span><span id="bNet">£0</span></div>
       </div>
+
+      <div class="breakdown-heading">Employer contributions (paid by the business, on top of gross pay)</div>
+      <div class="breakdown">
+        <div class="breakdown-row"><span>Employer's National Insurance</span><span id="bEmployerNi">£0</span></div>
+        <div class="breakdown-row"><span>Total Cost to Business</span><span id="bTotalCost">£0</span></div>
+      </div>
+
       <div class="note">
-        Employer's National Insurance on this payment (not deducted from the employee, but a real cost to the business): <strong id="bEmployerNi">£0</strong>
+        "Total Cost to Business" = gross pay + employer's NI. This is what the payment actually
+        costs the business, separate from what the employee receives.
       </div>
       <div class="note">
         Figures based on 2026/27 tax year rates. NI categories other than A use simplified standard-rate
@@ -145,7 +160,7 @@
   <div class="card">
     <h2>Payslip history</h2>
     <table id="historyTable">
-      <thead><tr><th>Period</th><th>Employee</th><th style="text-align:right">Gross</th><th style="text-align:right">Tax</th><th style="text-align:right">NI</th><th style="text-align:right">Student Loan</th><th style="text-align:right">Net</th></tr></thead>
+      <thead><tr><th>Period</th><th>Employee</th><th style="text-align:right">Gross</th><th style="text-align:right">Tax</th><th style="text-align:right">Employee NI</th><th style="text-align:right">Student Loan</th><th style="text-align:right">Net Pay</th><th style="text-align:right">Employer NI</th><th style="text-align:right">Total Cost</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -247,11 +262,13 @@
     document.getElementById('rGross').textContent = fmt(gross);
     document.getElementById('rDeductions').textContent = fmt(totalDeductions);
     document.getElementById('rNet').textContent = fmt(net);
+    document.getElementById('bGross').textContent = fmt(gross);
     document.getElementById('bTax').textContent = fmt(tax);
     document.getElementById('bNi').textContent = fmt(ni);
     document.getElementById('bSl').textContent = fmt(sl);
     document.getElementById('bNet').textContent = fmt(net);
     document.getElementById('bEmployerNi').textContent = fmt(employerNi);
+    document.getElementById('bTotalCost').textContent = fmt(gross + employerNi);
     document.getElementById('results').style.display = 'block';
 
     const employeeName = document.getElementById('employeeName').value || 'Unnamed employee';
@@ -301,8 +318,10 @@
         <td style="text-align:right">${fmt(r.employee_ni)}</td>
         <td style="text-align:right">${fmt(r.student_loan)}</td>
         <td style="text-align:right; font-weight:700">${fmt(r.net_pay)}</td>
+        <td style="text-align:right">${fmt(r.employer_ni)}</td>
+        <td style="text-align:right; font-weight:700">${fmt(Number(r.gross_pay) + Number(r.employer_ni))}</td>
       </tr>
-    `).join('') || '<tr><td colspan="7" style="color:#6b7280">No payslips saved yet.</td></tr>';
+    `).join('') || '<tr><td colspan="9" style="color:#6b7280">No payslips saved yet.</td></tr>';
   }
 
   loadHistory();
