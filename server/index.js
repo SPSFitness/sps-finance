@@ -135,6 +135,32 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
     lowConfidence: daysElapsedInMonth < 7 // early in the month, extrapolation is noisy
   };
 
+  // Cross-check against GoTeamUp's actual charged amounts, where available — bank deposits are
+  // net of processing fees and can lag or batch differently than when the sale was actually made,
+  // so this is a more accurate source for genuine taxable turnover where we have it.
+  let gtuComparison = null;
+  try {
+    const { rows: gtuRows } = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as txn_count,
+              MIN(charged_at) as earliest, MAX(charged_at) as latest
+       FROM gtu_payments
+       WHERE charged_at BETWEEN $1 AND $2`,
+      [from, to]
+    );
+    const gtuTotal = Number(gtuRows[0].total);
+    gtuComparison = {
+      gtuTotal,
+      txnCount: Number(gtuRows[0].txn_count),
+      earliest: gtuRows[0].earliest,
+      latest: gtuRows[0].latest,
+      differenceFromBank: gtuTotal - total,
+      gtuOverThreshold: gtuTotal >= threshold
+    };
+  } catch (err) {
+    // gtu_payments table may not exist yet — fine, just skip the comparison
+    gtuComparison = null;
+  }
+
   res.json({
     rollingTotal: total,
     threshold,
@@ -142,7 +168,8 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
     periodFrom: from,
     periodTo: to,
     projection,
-    currentMonthProjection
+    currentMonthProjection,
+    gtuComparison
   });
 });
 
