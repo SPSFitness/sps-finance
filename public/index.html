@@ -928,16 +928,35 @@
       `${fmt(data.rollingTotal)} of ${fmt(data.threshold)}`;
 
     const note = document.getElementById('vatNote');
+    let noteText = '';
+    let noteColor = 'var(--grey)';
+
     if (pct >= 100) {
-      note.textContent = `You're over the £${data.threshold.toLocaleString('en-GB')} threshold — registration is likely required within 30 days if this holds. Check with your accountant.`;
-      note.style.color = 'var(--expense)';
+      noteText = `You're over the £${data.threshold.toLocaleString('en-GB')} threshold — registration is likely required within 30 days if this holds. Check with your accountant.`;
+      noteColor = 'var(--expense)';
     } else if (pct >= 90) {
-      note.textContent = `${fmt(data.remaining)} of headroom left before the threshold — worth a conversation with your accountant now.`;
-      note.style.color = '#b45309';
+      noteText = `${fmt(data.remaining)} of headroom left before the threshold — worth a conversation with your accountant now.`;
+      noteColor = '#b45309';
     } else {
-      note.textContent = `${fmt(data.remaining)} of headroom left before the £${data.threshold.toLocaleString('en-GB')} threshold, based on trading income over the last 12 months.`;
-      note.style.color = 'var(--grey)';
+      noteText = `${fmt(data.remaining)} of headroom left before the £${data.threshold.toLocaleString('en-GB')} threshold, based on trading income over the last 12 months.`;
     }
+
+    // Projection line — a rough heads-up based on recent trend, not a certified forecast
+    let projectionText = '';
+    if (data.projection) {
+      if (data.projection.trending === 'up') {
+        const monthLabel = new Date(data.projection.projectedDate).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+        projectionText = ` At your recent run rate (trading income trending up by roughly ${fmt(data.projection.netMonthlyChange)}/month net), you're on track to cross the threshold around <strong>${monthLabel}</strong> if this pace continues.`;
+      } else if (data.projection.trending === 'flat-or-down') {
+        projectionText = ` Based on the last 3 months compared to what's rolling off the 12-month window, turnover isn't trending upward at the moment — no specific crossing date projected, but keep an eye on it.`;
+      } else if (data.projection.trending === 'over') {
+        projectionText = ``;
+      }
+    }
+
+    note.innerHTML = noteText + projectionText +
+      `<br><span style="font-size:11px; opacity:0.75;">Projection is a rough estimate based on recent trend, not a certified forecast — always confirm with your accountant.</span>`;
+    note.style.color = noteColor;
   }
 
   // Default range: tax year start to today
