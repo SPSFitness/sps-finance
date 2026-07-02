@@ -38,6 +38,10 @@
   .breakdown { margin-top: 20px; font-size: 13px; }
   .breakdown-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
   .breakdown-row:last-child { border-bottom: none; font-weight: 700; }
+  .breakdown-heading {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--grey);
+    font-weight: 700; margin-top: 22px; margin-bottom: 4px;
+  }
   .save-btn {
     background: white; border: 1px solid var(--income); color: var(--income); padding: 10px 20px;
     border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 16px;
@@ -77,6 +81,10 @@
         <input type="text" id="employeeName" placeholder="e.g. Emily">
       </div>
       <div class="field">
+        <label>National Insurance number</label>
+        <input type="text" id="niNumber" placeholder="e.g. QQ123456C" style="text-transform:uppercase">
+      </div>
+      <div class="field">
         <label>Pay period end date</label>
         <input type="date" id="payPeriodEnd">
       </div>
@@ -102,8 +110,8 @@
         <label>Student loan plan</label>
         <select id="studentLoanPlan">
           <option value="none">No student loan</option>
-          <option value="plan1" selected>Plan 1</option>
-          <option value="plan2">Plan 2</option>
+          <option value="plan1">Plan 1</option>
+          <option value="plan2" selected>Plan 2</option>
           <option value="plan4">Plan 4 (Scotland)</option>
           <option value="plan5">Plan 5</option>
           <option value="postgrad">Postgraduate Loan</option>
@@ -120,16 +128,27 @@
       <div class="result-grid">
         <div class="result-box"><div class="lbl">Gross Pay</div><div class="val" id="rGross">£0</div></div>
         <div class="result-box"><div class="lbl">Total Deductions</div><div class="val" id="rDeductions">£0</div></div>
-        <div class="result-box net"><div class="lbl">Net Pay</div><div class="val" id="rNet">£0</div></div>
+        <div class="result-box net"><div class="lbl">Net Pay (take-home)</div><div class="val" id="rNet">£0</div></div>
       </div>
+
+      <div class="breakdown-heading">Deducted from employee</div>
       <div class="breakdown">
+        <div class="breakdown-row"><span>Gross Pay</span><span id="bGross">£0</span></div>
         <div class="breakdown-row"><span>Income Tax</span><span id="bTax">£0</span></div>
         <div class="breakdown-row"><span>Employee National Insurance</span><span id="bNi">£0</span></div>
         <div class="breakdown-row"><span>Student Loan Repayment</span><span id="bSl">£0</span></div>
-        <div class="breakdown-row"><span>Net Pay</span><span id="bNet">£0</span></div>
+        <div class="breakdown-row"><span>Net Pay (take-home)</span><span id="bNet">£0</span></div>
       </div>
+
+      <div class="breakdown-heading">Employer contributions (paid by the business, on top of gross pay)</div>
+      <div class="breakdown">
+        <div class="breakdown-row"><span>Employer's National Insurance</span><span id="bEmployerNi">£0</span></div>
+        <div class="breakdown-row"><span>Total Cost to Business</span><span id="bTotalCost">£0</span></div>
+      </div>
+
       <div class="note">
-        Employer's National Insurance on this payment (not deducted from the employee, but a real cost to the business): <strong id="bEmployerNi">£0</strong>
+        "Total Cost to Business" = gross pay + employer's NI. This is what the payment actually
+        costs the business, separate from what the employee receives.
       </div>
       <div class="note">
         Figures based on 2026/27 tax year rates. NI categories other than A use simplified standard-rate
@@ -145,7 +164,7 @@
   <div class="card">
     <h2>Payslip history</h2>
     <table id="historyTable">
-      <thead><tr><th>Period</th><th>Employee</th><th style="text-align:right">Gross</th><th style="text-align:right">Tax</th><th style="text-align:right">NI</th><th style="text-align:right">Student Loan</th><th style="text-align:right">Net</th></tr></thead>
+      <thead><tr><th>Period</th><th>Employee</th><th>NI Number</th><th style="text-align:right">Gross</th><th style="text-align:right">Tax</th><th style="text-align:right">Employee NI</th><th style="text-align:right">Student Loan</th><th style="text-align:right">Net Pay</th><th style="text-align:right">Employer NI</th><th style="text-align:right">Total Cost</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -166,7 +185,7 @@
   const HIGHER_RATE_CEILING_ANNUAL = 125140; // 40% up to here, 45% above
   const NI_PT_MONTHLY = 1048;   // Primary threshold
   const NI_UEL_MONTHLY = 4189;  // Upper earnings limit
-  const NI_SECONDARY_THRESHOLD_MONTHLY = 416; // Employer NI kicks in above this
+  const NI_SECONDARY_THRESHOLD_MONTHLY = 417; // Employer NI kicks in above this (£5,000/year secondary threshold)
 
   const STUDENT_LOAN_THRESHOLDS_ANNUAL = {
     plan1: 26900, plan2: 29385, plan4: 33795, plan5: 25000, postgrad: 21000
@@ -247,19 +266,22 @@
     document.getElementById('rGross').textContent = fmt(gross);
     document.getElementById('rDeductions').textContent = fmt(totalDeductions);
     document.getElementById('rNet').textContent = fmt(net);
+    document.getElementById('bGross').textContent = fmt(gross);
     document.getElementById('bTax').textContent = fmt(tax);
     document.getElementById('bNi').textContent = fmt(ni);
     document.getElementById('bSl').textContent = fmt(sl);
     document.getElementById('bNet').textContent = fmt(net);
     document.getElementById('bEmployerNi').textContent = fmt(employerNi);
+    document.getElementById('bTotalCost').textContent = fmt(gross + employerNi);
     document.getElementById('results').style.display = 'block';
 
     const employeeName = document.getElementById('employeeName').value || 'Unnamed employee';
+    const niNumber = document.getElementById('niNumber').value.toUpperCase();
     const payPeriodEnd = document.getElementById('payPeriodEnd').value;
     document.getElementById('printSub').textContent =
-      `${employeeName} · Pay period ending ${payPeriodEnd || '(not set)'} · Tax code ${taxCode} · NI category ${niCategory}`;
+      `${employeeName}${niNumber ? ' · NI: ' + niNumber : ''} · Pay period ending ${payPeriodEnd || '(not set)'} · Tax code ${taxCode} · NI category ${niCategory}`;
 
-    lastResult = { gross, tax, ni, employerNi, sl, net, taxCode, niCategory, slPlan };
+    lastResult = { gross, tax, ni, employerNi, sl, net, taxCode, niCategory, slPlan, niNumber };
   }
 
   async function savePayslip() {
@@ -267,42 +289,81 @@
     const employeeName = document.getElementById('employeeName').value || 'Unnamed';
     const payPeriodEnd = document.getElementById('payPeriodEnd').value || new Date().toISOString().slice(0,10);
 
-    await fetch(`/api/payslips?key=${KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        employee_name: employeeName,
-        pay_period_end: payPeriodEnd,
-        tax_code: lastResult.taxCode,
-        ni_category: lastResult.niCategory,
-        student_loan_plan: lastResult.slPlan,
-        gross_pay: lastResult.gross,
-        income_tax: lastResult.tax,
-        employee_ni: lastResult.ni,
-        employer_ni: lastResult.employerNi,
-        student_loan: lastResult.sl,
-        net_pay: lastResult.net
-      })
-    });
-    alert('Saved to payslip history.');
-    loadHistory();
+    try {
+      const res = await fetch(`/api/payslips?key=${KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employee_name: employeeName,
+          pay_period_end: payPeriodEnd,
+          tax_code: lastResult.taxCode,
+          ni_category: lastResult.niCategory,
+          ni_number: lastResult.niNumber,
+          student_loan_plan: lastResult.slPlan,
+          gross_pay: lastResult.gross,
+          income_tax: lastResult.tax,
+          employee_ni: lastResult.ni,
+          employer_ni: lastResult.employerNi,
+          student_loan: lastResult.sl,
+          net_pay: lastResult.net
+        })
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        alert(`Save failed (server error ${res.status}). Details: ${errorText.slice(0, 300)}`);
+        return;
+      }
+
+      alert('Saved to payslip history.');
+      loadHistory();
+    } catch (err) {
+      alert('Save failed — could not reach the server: ' + err.message);
+    }
   }
+
+  let historyData = [];
 
   async function loadHistory() {
     const res = await fetch(`/api/payslips?key=${KEY}`);
     const rows = await res.json();
+    historyData = rows;
     const tbody = document.querySelector('#historyTable tbody');
-    tbody.innerHTML = rows.map(r => `
+    tbody.innerHTML = rows.map((r, idx) => `
       <tr>
         <td>${r.pay_period_end}</td>
         <td>${r.employee_name}</td>
+        <td style="font-size:11px; color:#6b7280;">${r.ni_number || '—'}</td>
         <td style="text-align:right">${fmt(r.gross_pay)}</td>
         <td style="text-align:right">${fmt(r.income_tax)}</td>
         <td style="text-align:right">${fmt(r.employee_ni)}</td>
         <td style="text-align:right">${fmt(r.student_loan)}</td>
         <td style="text-align:right; font-weight:700">${fmt(r.net_pay)}</td>
+        <td style="text-align:right">${fmt(r.employer_ni)}</td>
+        <td style="text-align:right; font-weight:700">${fmt(Number(r.gross_pay) + Number(r.employer_ni))}</td>
+        <td><button class="print-btn" style="padding:5px 10px; font-size:11px; margin:0;" onclick="recallPayslip(${idx})">View / Print</button></td>
       </tr>
-    `).join('') || '<tr><td colspan="7" style="color:#6b7280">No payslips saved yet.</td></tr>';
+    `).join('') || '<tr><td colspan="11" style="color:#6b7280">No payslips saved yet.</td></tr>';
+  }
+
+  // Loads a historical payslip back into the results/print view, exactly as if it had just
+  // been calculated — lets you reprint any old payslip on demand.
+  function recallPayslip(idx) {
+    const r = historyData[idx];
+    document.getElementById('rGross').textContent = fmt(r.gross_pay);
+    document.getElementById('rDeductions').textContent = fmt(Number(r.income_tax) + Number(r.employee_ni) + Number(r.student_loan));
+    document.getElementById('rNet').textContent = fmt(r.net_pay);
+    document.getElementById('bGross').textContent = fmt(r.gross_pay);
+    document.getElementById('bTax').textContent = fmt(r.income_tax);
+    document.getElementById('bNi').textContent = fmt(r.employee_ni);
+    document.getElementById('bSl').textContent = fmt(r.student_loan);
+    document.getElementById('bNet').textContent = fmt(r.net_pay);
+    document.getElementById('bEmployerNi').textContent = fmt(r.employer_ni);
+    document.getElementById('bTotalCost').textContent = fmt(Number(r.gross_pay) + Number(r.employer_ni));
+    document.getElementById('printSub').textContent =
+      `${r.employee_name}${r.ni_number ? ' · NI: ' + r.ni_number : ''} · Pay period ending ${r.pay_period_end} · Tax code ${r.tax_code} · NI category ${r.ni_category} · (recalled from history)`;
+    document.getElementById('results').style.display = 'block';
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
   }
 
   loadHistory();
