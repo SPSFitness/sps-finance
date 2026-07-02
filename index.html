@@ -74,6 +74,14 @@
     font-weight: 600;
     cursor: pointer;
   }
+  .paye-link {
+    color: var(--teal);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    margin-right: 8px;
+    align-self: center;
+  }
   .period-banner {
     background: #eef2ff;
     border-bottom: 1px solid var(--border);
@@ -103,6 +111,11 @@
   .presets button:hover {
     border-color: var(--blue);
     color: var(--blue);
+  }
+  .preset-divider {
+    width: 1px;
+    background: var(--border);
+    margin: 0 4px;
   }
   .vat-card {
     background: var(--card);
@@ -384,6 +397,7 @@
 <header>
   <h1>SPS <span>Finance</span></h1>
   <div class="date-controls">
+    <a href="#" onclick="window.open('/paye.html?key=' + KEY, '_blank'); return false;" class="paye-link">PAYE Calculator</a>
     <div class="date-field">
       <label for="from">From</label>
       <input type="date" id="from">
@@ -400,6 +414,9 @@
   <button onclick="setPreset('ytd')">Tax Year to Date</button>
   <button onclick="setPreset('month')">This Month</button>
   <button onclick="setPreset('rolling12')">Rolling 12 Months</button>
+  <span class="preset-divider"></span>
+  <button onclick="openReport('profit-loss')">📄 Profit & Loss (PDF)</button>
+  <button onclick="openReport('transactions-csv')">📊 Export Transactions (CSV)</button>
 </div>
 
 <div class="period-banner" id="periodBanner"></div>
@@ -787,21 +804,51 @@
       return;
     }
 
-    const rowsHtml = txns.map(t => `
+    const rowsHtml = txns.map(t => {
+      const options = CATEGORIES.map(c =>
+        `<option value="${c.id}" ${c.id === t.category_id ? 'selected' : ''}>${c.name}</option>`
+      ).join('');
+      return `
       <tr>
         <td>${t.txn_date}</td>
         <td>${t.description_raw}${t.merchant_name ? ` <span class="drill-merchant">(${t.merchant_name})</span>` : ''}</td>
         <td class="amount ${Number(t.amount) >= 0 ? 'pos' : 'neg'}">${fmt(t.amount)}</td>
         <td class="drill-source">${t.categorized_by}${t.starling_spending_category ? ` · ${t.starling_spending_category}` : ''}${t.category_confidence ? ` · ${(t.category_confidence*100).toFixed(0)}%` : ''}</td>
+        <td><select id="drill-cat-${t.id}" class="drill-select">${options}</select></td>
+        <td class="fix-options">
+          <label><input type="checkbox" id="drill-rule-${t.id}" checked> Remember</label>
+          <label><input type="checkbox" id="drill-similar-${t.id}"> Apply to matching</label>
+        </td>
+        <td><button class="fix-btn" onclick="fixDrilldownCategory(${t.id})">Save</button></td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
 
     content.innerHTML = `
       <table class="drilldown-table">
-        <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Source</th></tr></thead>
+        <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Source</th><th>Category</th><th>Options</th><th></th></tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
     `;
+  }
+
+  async function fixDrilldownCategory(txnId) {
+    const categoryId = document.getElementById(`drill-cat-${txnId}`).value;
+    const createRule = document.getElementById(`drill-rule-${txnId}`).checked;
+    const applyToSimilar = document.getElementById(`drill-similar-${txnId}`).checked;
+
+    await fetch(`/api/transactions/${txnId}/category?key=${KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category_id: Number(categoryId), create_rule: createRule, apply_to_similar: applyToSimilar })
+    });
+
+    // Category totals everywhere have now shifted — refresh the whole dashboard rather than
+    // leave stale numbers showing. The drilldown itself closes since its total is now wrong.
+    await loadSummary();
+    await loadMonthly();
+    await loadReview();
+    await loadVatCheck();
   }
 
   async function fixCategory(txnId) {
@@ -814,6 +861,12 @@
       body: JSON.stringify({ category_id: Number(categoryId), create_rule: createRule, apply_to_similar: applyToSimilar })
     });
     loadReview();
+  }
+
+  function openReport(kind) {
+    const from = document.getElementById('from').value;
+    const to = document.getElementById('to').value;
+    window.open(`/report/${kind}?from=${from}&to=${to}&key=${KEY}`, '_blank');
   }
 
   function toISODate(d) { return d.toISOString().slice(0, 10); }
