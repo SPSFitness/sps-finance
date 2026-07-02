@@ -102,13 +102,47 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
     }
   }
 
+  // Current month trajectory — based on this month's actual pace so far, extrapolated to
+  // month-end, then swapped into the rolling total to see where that would leave you.
+  // Early in a month this is noisy (2 days of data tells you little) — flagged in the response
+  // so the dashboard can show an appropriate caveat rather than present it as solid.
+  const now = new Date();
+  const daysElapsedInMonth = now.getDate();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const currentMonthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+
+  const { rows: currentMonthRows } = await pool.query(
+    `SELECT COALESCE(SUM(t.amount), 0) as total
+     FROM transactions t
+     JOIN categories c ON c.id = t.category_id
+     WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
+       AND t.txn_date >= $1`,
+    [currentMonthStart]
+  );
+
+  const monthActualSoFar = Number(currentMonthRows[0].total);
+  const dailyRate = daysElapsedInMonth > 0 ? monthActualSoFar / daysElapsedInMonth : 0;
+  const projectedMonthTotal = dailyRate * daysInMonth;
+  const projectedRollingTotal = total - monthActualSoFar + projectedMonthTotal;
+
+  const currentMonthProjection = {
+    daysElapsedInMonth,
+    daysInMonth,
+    monthActualSoFar,
+    projectedMonthTotal,
+    projectedRollingTotal,
+    projectedOverThreshold: projectedRollingTotal >= threshold,
+    lowConfidence: daysElapsedInMonth < 7 // early in the month, extrapolation is noisy
+  };
+
   res.json({
     rollingTotal: total,
     threshold,
     remaining: threshold - total,
     periodFrom: from,
     periodTo: to,
-    projection
+    projection,
+    currentMonthProjection
   });
 });
 
