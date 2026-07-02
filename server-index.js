@@ -3,6 +3,7 @@ const express = require('express');
 const cron = require('node-cron');
 const path = require('path');
 const pool = require('./db');
+const { ingestForAccount } = require('./ingest');
 const { exec } = require('child_process');
 
 const app = express();
@@ -15,6 +16,29 @@ function requireAuth(req, res, next) {
   if (key !== process.env.APP_SECRET) return res.status(401).json({ error: 'unauthorized' });
   next();
 }
+
+// Manually trigger a sync right now — needed because the free Render tier spins the server
+// down after inactivity, so the scheduled 6am cron below only fires if something happens to
+// have woken the server up around that time. This button (and the Render Cron Job described
+// in the README) are the reliable ways to actually get fresh data in.
+app.post('/api/sync-now', requireAuth, async (req, res) => {
+  try {
+    const { rows: accounts } = await pool.query(`SELECT * FROM accounts`);
+    const to = new Date().toISOString();
+    const fromDate = new Date();
+    fromDate.setDate(fromDate.getDate() - 7);
+    const from = fromDate.toISOString();
+
+    const results = [];
+    for (const account of accounts) {
+      const result = await ingestForAccount(account, from, to, 'daily');
+      results.push({ account: account.display_name, ...result });
+    }
+    res.json({ ok: true, results });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
 // VAT threshold check — always the true rolling 12 months from today, independent of
 // whatever date range the dashboard is currently showing. This is what HMRC actually checks.

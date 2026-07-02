@@ -417,6 +417,8 @@
   <span class="preset-divider"></span>
   <button onclick="openReport('profit-loss')">📄 Profit & Loss (PDF)</button>
   <button onclick="openReport('transactions-csv')">📊 Export Transactions (CSV)</button>
+  <span class="preset-divider"></span>
+  <button onclick="syncNow()" id="syncBtn">🔄 Sync Now</button>
 </div>
 
 <div class="period-banner" id="periodBanner"></div>
@@ -861,6 +863,27 @@
       body: JSON.stringify({ category_id: Number(categoryId), create_rule: createRule, apply_to_similar: applyToSimilar })
     });
     loadReview();
+  }
+
+  async function syncNow() {
+    const btn = document.getElementById('syncBtn');
+    btn.disabled = true;
+    btn.textContent = '🔄 Syncing...';
+    try {
+      const res = await fetch(`/api/sync-now?key=${KEY}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        const totalNew = data.results.reduce((s, r) => s + (r.inserted || 0), 0);
+        alert(`Sync complete. ${totalNew} new transaction(s) found and categorised.`);
+        loadSummary(); loadMonthly(); loadReview(); loadVatCheck();
+      } else {
+        alert('Sync failed: ' + data.error);
+      }
+    } catch (err) {
+      alert('Sync failed: ' + err.message);
+    }
+    btn.disabled = false;
+    btn.textContent = '🔄 Sync Now';
   }
 
   function openReport(kind) {

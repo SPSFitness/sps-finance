@@ -46,6 +46,19 @@
   th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--grey); padding: 8px 10px; border-bottom: 1px solid var(--border); }
   td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
   .note { font-size: 12px; color: var(--grey); margin-top: 14px; line-height: 1.5; }
+  .print-btn {
+    background: white; border: 1px solid var(--blue); color: var(--blue); padding: 10px 20px;
+    border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 16px; margin-right: 10px;
+  }
+  @media print {
+    header, .field-grid, .calc-btn, .save-btn, .print-btn, .card h2, main > .card:last-child { display: none !important; }
+    body { background: white; }
+    .card { border: none; box-shadow: none; padding: 0; }
+    .printable-header { display: block !important; }
+  }
+  .printable-header { display: none; margin-bottom: 20px; }
+  .printable-header h1 { font-size: 20px; margin: 0; }
+  .printable-header .sub { color: var(--grey); font-size: 13px; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -100,6 +113,10 @@
     <button class="calc-btn" onclick="calculate()">Calculate</button>
 
     <div id="results" style="display:none">
+      <div class="printable-header">
+        <h1>SPS Fitness — Payslip</h1>
+        <div class="sub" id="printSub"></div>
+      </div>
       <div class="result-grid">
         <div class="result-box"><div class="lbl">Gross Pay</div><div class="val" id="rGross">£0</div></div>
         <div class="result-box"><div class="lbl">Total Deductions</div><div class="val" id="rDeductions">£0</div></div>
@@ -121,6 +138,7 @@
         calculator before relying on it. K-code tax codes and NI category J/Z are not supported here.
       </div>
       <button class="save-btn" onclick="savePayslip()">Save this payslip to history</button>
+      <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
     </div>
   </div>
 
@@ -235,6 +253,11 @@
     document.getElementById('bNet').textContent = fmt(net);
     document.getElementById('bEmployerNi').textContent = fmt(employerNi);
     document.getElementById('results').style.display = 'block';
+
+    const employeeName = document.getElementById('employeeName').value || 'Unnamed employee';
+    const payPeriodEnd = document.getElementById('payPeriodEnd').value;
+    document.getElementById('printSub').textContent =
+      `${employeeName} · Pay period ending ${payPeriodEnd || '(not set)'} · Tax code ${taxCode} · NI category ${niCategory}`;
 
     lastResult = { gross, tax, ni, employerNi, sl, net, taxCode, niCategory, slPlan };
   }
