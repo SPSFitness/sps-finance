@@ -57,14 +57,58 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
     [from, to]
   );
 
-  const threshold = 90000; // UK VAT registration threshold, correct as of April 2026 tax year
+  const threshold = 90000;
   const total = Number(rows[0].total);
+
+  // Projection: compare the last 3 months' average trading income against the 3 months about
+  // to drop off the back of the 12-month window (10-12 months ago). If income is trending up,
+  // estimate how many months until the rolling total crosses the threshold. This is a rough
+  // heads-up based on recent trend, not a certified forecast — treat it as a prompt to check
+  // in with an accountant, not as the actual compliance figure.
+  const { rows: monthlyRows } = await pool.query(
+    `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month, SUM(t.amount) as total
+     FROM transactions t
+     JOIN categories c ON c.id = t.category_id
+     WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
+       AND t.txn_date >= (CURRENT_DATE - INTERVAL '16 months')
+       AND date_trunc('month', t.txn_date) < date_trunc('month', CURRENT_DATE)
+     GROUP BY month
+     ORDER BY month ASC`
+  );
+
+  let projection = null;
+  if (monthlyRows.length >= 13) {
+    const monthTotals = monthlyRows.map(r => Number(r.total));
+    const recent3 = monthTotals.slice(-3);
+    const rollingOff3 = monthTotals.slice(-13, -10); // the 3 oldest months still inside the current window
+    const avgRecent = recent3.reduce((a, b) => a + b, 0) / recent3.length;
+    const avgRollingOff = rollingOff3.length === 3 ? rollingOff3.reduce((a, b) => a + b, 0) / rollingOff3.length : null;
+
+    if (avgRollingOff !== null) {
+      const netMonthlyChange = avgRecent - avgRollingOff;
+      if (netMonthlyChange > 0 && total < threshold) {
+        const monthsToThreshold = Math.ceil((threshold - total) / netMonthlyChange);
+        const projectedDate = new Date();
+        projectedDate.setMonth(projectedDate.getMonth() + monthsToThreshold);
+        projection = {
+          trending: 'up',
+          netMonthlyChange,
+          monthsToThreshold,
+          projectedDate: projectedDate.toISOString().slice(0, 10)
+        };
+      } else if (netMonthlyChange <= 0) {
+        projection = { trending: total >= threshold ? 'over' : 'flat-or-down', netMonthlyChange };
+      }
+    }
+  }
+
   res.json({
     rollingTotal: total,
     threshold,
     remaining: threshold - total,
     periodFrom: from,
-    periodTo: to
+    periodTo: to,
+    projection
   });
 });
 
