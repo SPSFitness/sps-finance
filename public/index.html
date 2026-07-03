@@ -544,6 +544,13 @@
     return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
   }
 
+  // Short dd/mm/yyyy format for compact table rows — strips any time component (T00:00:00.000Z etc)
+  function formatDateShort(isoDate) {
+    if (!isoDate) return '';
+    const d = new Date(isoDate);
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
   function monthLabel(monthStr) {
     const [year, month] = monthStr.split('-');
     const d = new Date(Number(year), Number(month) - 1, 1);
@@ -797,7 +804,7 @@
         `<option value="${c.id}" ${c.id === r.category_id ? 'selected' : ''}>${c.name}</option>`
       ).join('');
       tr.innerHTML = `
-        <td>${r.txn_date}</td>
+        <td>${formatDateShort(r.txn_date)}</td>
         <td>${r.description_raw}${r.category_confidence ? `<div class="conf">AI confidence: ${(r.category_confidence * 100).toFixed(0)}%</div>` : ''}</td>
         <td class="amount ${r.amount >= 0 ? 'pos' : 'neg'}">${fmt(r.amount)}</td>
         <td><select id="cat-${r.id}">${options}</select></td>
@@ -848,7 +855,7 @@
       ).join('');
       return `
       <tr>
-        <td>${t.txn_date}</td>
+        <td>${formatDateShort(t.txn_date)}</td>
         <td>${t.description_raw}${t.merchant_name ? ` <span class="drill-merchant">(${t.merchant_name})</span>` : ''}</td>
         <td class="amount ${Number(t.amount) >= 0 ? 'pos' : 'neg'}">${fmt(t.amount)}</td>
         <td class="drill-source">${t.categorized_by}${t.starling_spending_category ? ` · ${t.starling_spending_category}` : ''}${t.category_confidence ? ` · ${(t.category_confidence*100).toFixed(0)}%` : ''}</td>
@@ -1023,7 +1030,7 @@
       gtuBox.style.display = 'block';
       gtuBox.innerHTML = `
         <div><strong>Cross-check against GoTeamUp actual charges:</strong> ${fmt(g.gtuTotal)}
-        (${g.txnCount} payment records, ${g.earliest} to ${g.latest})</div>
+        (${g.txnCount} payment records, ${formatDateShort(g.earliest)} to ${formatDateShort(g.latest)})</div>
         <div style="margin-top:8px;">This is <strong style="color:${significant ? 'var(--expense)' : 'var(--grey)'}">${fmt(diffAbs)} ${diffDirection}</strong>
         than the bank-deposit figure of ${fmt(data.rollingTotal)}.</div>
         ${g.gtuOverThreshold && !(data.rollingTotal >= data.threshold)
