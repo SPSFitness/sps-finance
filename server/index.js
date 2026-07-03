@@ -21,6 +21,8 @@ function requireAuth(req, res, next) {
 // down after inactivity, so the scheduled 6am cron below only fires if something happens to
 // have woken the server up around that time. This button (and the Render Cron Job described
 // in the README) are the reliable ways to actually get fresh data in.
+const { getPaidInvoiceLineItems } = require('./goteamup');
+
 app.post('/api/sync-now', requireAuth, async (req, res) => {
   try {
     const { rows: accounts } = await pool.query(`SELECT * FROM accounts`);
@@ -34,7 +36,37 @@ app.post('/api/sync-now', requireAuth, async (req, res) => {
       const result = await ingestForAccount(account, from, to, 'daily');
       results.push({ account: account.display_name, ...result });
     }
-    res.json({ ok: true, results });
+
+    // Also refresh GoTeamUp data, if a token is configured — keeps the VAT cross-check
+    // showing genuinely current data rather than whatever was last pulled manually.
+    let gtuResult = null;
+    if (process.env.GOTEAMUP_API_TOKEN) {
+      try {
+        const gtuRows = await getPaidInvoiceLineItems();
+        let gtuInserted = 0;
+        for (const row of gtuRows) {
+          const gtuPaymentId = `api-${row.id}`;
+          const planName = (row.billed_item && row.billed_item.membership && row.billed_item.membership.name)
+            || row.description || row.type;
+          const amount = row.amount ? row.amount.decimal : 0;
+          const chargedAt = row.invoice.paid_at.slice(0, 10);
+
+          const insertResult = await pool.query(
+            `INSERT INTO gtu_payments (gtu_payment_id, plan_name, category, amount, payment_method, charged_at, raw)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (gtu_payment_id) DO NOTHING
+             RETURNING id`,
+            [gtuPaymentId, planName, row.type || 'other', amount, 'api', chargedAt, JSON.stringify(row)]
+          );
+          if (insertResult.rows.length > 0) gtuInserted++;
+        }
+        gtuResult = { checked: gtuRows.length, inserted: gtuInserted };
+      } catch (gtuErr) {
+        gtuResult = { error: gtuErr.message };
+      }
+    }
+
+    res.json({ ok: true, results, gtuResult });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -396,6 +428,12 @@ cron.schedule('0 6 * * *', () => {
     if (stdout) console.log(stdout);
     if (stderr) console.error(stderr);
   });
+  if (process.env.GOTEAMUP_API_TOKEN) {
+    exec('node server/sync_goteamup.js', (err, stdout, stderr) => {
+      if (stdout) console.log(stdout);
+      if (stderr) console.error(stderr);
+    });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
