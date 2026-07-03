@@ -917,7 +917,15 @@
       const data = await res.json();
       if (data.ok) {
         const totalNew = data.results.reduce((s, r) => s + (r.inserted || 0), 0);
-        alert(`Sync complete. ${totalNew} new transaction(s) found and categorised.`);
+        let message = `Sync complete. ${totalNew} new bank transaction(s) found and categorised.`;
+        if (data.gtuResult) {
+          if (data.gtuResult.error) {
+            message += `\n\nGoTeamUp sync failed: ${data.gtuResult.error}`;
+          } else {
+            message += `\n\nGoTeamUp: checked ${data.gtuResult.checked} paid invoice lines, ${data.gtuResult.inserted} new.`;
+          }
+        }
+        alert(message);
         loadSummary(); loadMonthly(); loadReview(); loadVatCheck();
       } else {
         alert('Sync failed: ' + data.error);
