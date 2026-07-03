@@ -121,30 +121,32 @@
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 18px 20px;
+    padding: 24px 28px;
     margin-bottom: 20px;
   }
   .vat-card .vat-top {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    margin-bottom: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .vat-card .vat-label {
-    font-size: 12px;
+    font-size: 14px;
     color: var(--grey);
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    font-weight: 600;
+    font-weight: 700;
   }
   .vat-card .vat-figure {
-    font-size: 13px;
-    font-weight: 700;
+    font-size: 20px;
+    font-weight: 800;
   }
   .vat-bar-track {
     background: #f1f3f5;
     border-radius: 100px;
-    height: 10px;
+    height: 14px;
     overflow: hidden;
   }
   .vat-bar-fill {
@@ -156,27 +158,41 @@
   .vat-bar-fill.warn { background: #f59e0b; }
   .vat-bar-fill.danger { background: var(--expense); }
   .vat-note {
-    font-size: 12px;
+    font-size: 16px;
     color: var(--grey);
+    margin-top: 16px;
+    line-height: 1.6;
+  }
+  .vat-note-caveat {
+    font-size: 13px;
+    opacity: 0.75;
+    display: block;
     margin-top: 8px;
   }
   .vat-trajectory {
-    font-size: 12px;
+    font-size: 16px;
     color: var(--black);
-    margin-top: 10px;
-    padding-top: 10px;
+    margin-top: 18px;
+    padding-top: 18px;
     border-top: 1px dashed var(--border);
-    line-height: 1.5;
+    line-height: 1.6;
   }
   .vat-gtu-box {
-    font-size: 12px;
+    font-size: 16px;
     color: var(--black);
-    margin-top: 10px;
-    padding: 12px;
+    margin-top: 18px;
+    padding: 20px;
     background: #f8f9ff;
     border: 1px solid #dce3ff;
-    border-radius: 8px;
-    line-height: 1.5;
+    border-radius: 10px;
+    line-height: 1.6;
+  }
+  .vat-gtu-box strong { font-weight: 700; }
+  .vat-gtu-box .vat-gtu-caveat {
+    font-size: 13px;
+    opacity: 0.75;
+    display: block;
+    margin-top: 10px;
   }
   main {
     max-width: 1100px;
@@ -974,8 +990,9 @@
       }
     }
 
-    note.innerHTML = noteText + projectionText +
-      `<br><span style="font-size:11px; opacity:0.75;">Projection is a rough estimate based on recent trend, not a certified forecast — always confirm with your accountant.</span>`;
+    note.innerHTML = `<div>${noteText}</div>` +
+      (projectionText ? `<div style="margin-top:10px;">${projectionText.trim()}</div>` : '') +
+      `<span class="vat-note-caveat">Projection is a rough estimate based on recent trend, not a certified forecast — always confirm with your accountant.</span>`;
     note.style.color = noteColor;
 
     // Current month trajectory — a more immediate, daily-updating signal
@@ -990,9 +1007,9 @@
         : `this would leave your rolling total at roughly ${fmt(cm.projectedRollingTotal)} by month-end.`;
 
       document.getElementById('vatMonthTrajectory').innerHTML =
-        `This month so far: ${fmt(cm.monthActualSoFar)} in${confidenceNote}. At this daily pace ` +
-        `(~${fmt(cm.projectedMonthTotal / cm.daysInMonth)}/day), you're on track for roughly ${fmt(cm.projectedMonthTotal)} ` +
-        `this month — ${overtext}`;
+        `<div>This month so far: <strong>${fmt(cm.monthActualSoFar)}</strong> in${confidenceNote}.</div>` +
+        `<div style="margin-top:8px;">At this daily pace (~${fmt(cm.projectedMonthTotal / cm.daysInMonth)}/day), ` +
+        `you're on track for roughly <strong>${fmt(cm.projectedMonthTotal)}</strong> this month — ${overtext}</div>`;
     }
 
     // GoTeamUp comparison — actual charged amounts vs what landed in the bank
@@ -1005,17 +1022,17 @@
 
       gtuBox.style.display = 'block';
       gtuBox.innerHTML = `
-        <strong>Cross-check against GoTeamUp actual charges:</strong> ${fmt(g.gtuTotal)}
-        (${g.txnCount} payment records, ${g.earliest} to ${g.latest})<br>
-        This is <strong style="color:${significant ? 'var(--expense)' : 'var(--grey)'}">${fmt(diffAbs)} ${diffDirection}</strong>
-        than the bank-deposit figure of ${fmt(data.rollingTotal)}.
+        <div><strong>Cross-check against GoTeamUp actual charges:</strong> ${fmt(g.gtuTotal)}
+        (${g.txnCount} payment records, ${g.earliest} to ${g.latest})</div>
+        <div style="margin-top:8px;">This is <strong style="color:${significant ? 'var(--expense)' : 'var(--grey)'}">${fmt(diffAbs)} ${diffDirection}</strong>
+        than the bank-deposit figure of ${fmt(data.rollingTotal)}.</div>
         ${g.gtuOverThreshold && !(data.rollingTotal >= data.threshold)
-          ? `<br><strong style="color:var(--expense)">Based on actual charges rather than bank deposits, you may already be over the £90,000 threshold — this needs checking with your accountant urgently.</strong>`
+          ? `<div style="margin-top:8px;"><strong style="color:var(--expense)">Based on actual charges rather than bank deposits, you may already be over the £90,000 threshold — this needs checking with your accountant urgently.</strong></div>`
           : ''}
-        <div style="font-size:11px; opacity:0.75; margin-top:4px;">
+        <span class="vat-gtu-caveat">
           July–November 2025 in this figure is reconstructed from bank deposits (pre-GoTeamUp / PT Minder era) —
           not independently verified charge data. December 2025 onward is real GoTeamUp export data.
-        </div>
+        </span>
       `;
     } else {
       gtuBox.style.display = 'none';
