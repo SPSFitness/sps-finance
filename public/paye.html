@@ -179,6 +179,12 @@
     return (num < 0 ? '-£' : '£') + Math.abs(num).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
+  function formatDateShort(isoDate) {
+    if (!isoDate) return '';
+    const d = new Date(isoDate);
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
   // 2026/27 tax year figures
   const PERSONAL_ALLOWANCE_ANNUAL = 12570;
   const BASIC_RATE_BAND_ANNUAL = 37700;   // 20% band above personal allowance
@@ -289,26 +295,37 @@
     const employeeName = document.getElementById('employeeName').value || 'Unnamed';
     const payPeriodEnd = document.getElementById('payPeriodEnd').value || new Date().toISOString().slice(0,10);
 
-    await fetch(`/api/payslips?key=${KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        employee_name: employeeName,
-        pay_period_end: payPeriodEnd,
-        tax_code: lastResult.taxCode,
-        ni_category: lastResult.niCategory,
-        ni_number: lastResult.niNumber,
-        student_loan_plan: lastResult.slPlan,
-        gross_pay: lastResult.gross,
-        income_tax: lastResult.tax,
-        employee_ni: lastResult.ni,
-        employer_ni: lastResult.employerNi,
-        student_loan: lastResult.sl,
-        net_pay: lastResult.net
-      })
-    });
-    alert('Saved to payslip history.');
-    loadHistory();
+    try {
+      const res = await fetch(`/api/payslips?key=${KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employee_name: employeeName,
+          pay_period_end: payPeriodEnd,
+          tax_code: lastResult.taxCode,
+          ni_category: lastResult.niCategory,
+          ni_number: lastResult.niNumber,
+          student_loan_plan: lastResult.slPlan,
+          gross_pay: lastResult.gross,
+          income_tax: lastResult.tax,
+          employee_ni: lastResult.ni,
+          employer_ni: lastResult.employerNi,
+          student_loan: lastResult.sl,
+          net_pay: lastResult.net
+        })
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        alert(`Save failed (server error ${res.status}). Details: ${errorText.slice(0, 300)}`);
+        return;
+      }
+
+      alert('Saved to payslip history.');
+      loadHistory();
+    } catch (err) {
+      alert('Save failed — could not reach the server: ' + err.message);
+    }
   }
 
   let historyData = [];
@@ -320,7 +337,7 @@
     const tbody = document.querySelector('#historyTable tbody');
     tbody.innerHTML = rows.map((r, idx) => `
       <tr>
-        <td>${r.pay_period_end}</td>
+        <td>${formatDateShort(r.pay_period_end)}</td>
         <td>${r.employee_name}</td>
         <td style="font-size:11px; color:#6b7280;">${r.ni_number || '—'}</td>
         <td style="text-align:right">${fmt(r.gross_pay)}</td>
@@ -350,7 +367,7 @@
     document.getElementById('bEmployerNi').textContent = fmt(r.employer_ni);
     document.getElementById('bTotalCost').textContent = fmt(Number(r.gross_pay) + Number(r.employer_ni));
     document.getElementById('printSub').textContent =
-      `${r.employee_name}${r.ni_number ? ' · NI: ' + r.ni_number : ''} · Pay period ending ${r.pay_period_end} · Tax code ${r.tax_code} · NI category ${r.ni_category} · (recalled from history)`;
+      `${r.employee_name}${r.ni_number ? ' · NI: ' + r.ni_number : ''} · Pay period ending ${formatDateShort(r.pay_period_end)} · Tax code ${r.tax_code} · NI category ${r.ni_category} · (recalled from history)`;
     document.getElementById('results').style.display = 'block';
     document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
   }
