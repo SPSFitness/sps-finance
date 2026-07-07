@@ -153,7 +153,28 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
   );
 
   const monthActualSoFar = Number(currentMonthRows[0].total);
-  const dailyRate = daysElapsedInMonth > 0 ? monthActualSoFar / daysElapsedInMonth : 0;
+
+  // Cross-check this month specifically against GoTeamUp's actual charges, not just bank
+  // deposits — bank data lags real charges by several days due to payment processor batching,
+  // so early in a month the bank-based figure can badly understate what's actually been charged.
+  let monthGtuActual = null;
+  try {
+    const { rows: gtuMonthRows } = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) as total FROM gtu_payments WHERE charged_at >= $1`,
+      [currentMonthStart]
+    );
+    monthGtuActual = Number(gtuMonthRows[0].total);
+  } catch (err) {
+    monthGtuActual = null; // gtu_payments table may not exist yet
+  }
+
+  // Use whichever figure is higher as the projection basis — GoTeamUp actual charges are more
+  // accurate when available, and using the higher of the two errs on the side of catching a
+  // threshold breach early rather than being falsely reassured by lagging bank data.
+  const projectionBasis = (monthGtuActual !== null && monthGtuActual > monthActualSoFar) ? monthGtuActual : monthActualSoFar;
+  const usingGtuBasis = projectionBasis === monthGtuActual && monthGtuActual > monthActualSoFar;
+
+  const dailyRate = daysElapsedInMonth > 0 ? projectionBasis / daysElapsedInMonth : 0;
   const projectedMonthTotal = dailyRate * daysInMonth;
   const projectedRollingTotal = total - monthActualSoFar + projectedMonthTotal;
 
@@ -161,6 +182,8 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
     daysElapsedInMonth,
     daysInMonth,
     monthActualSoFar,
+    monthGtuActual,
+    usingGtuBasis,
     projectedMonthTotal,
     projectedRollingTotal,
     projectedOverThreshold: projectedRollingTotal >= threshold,
