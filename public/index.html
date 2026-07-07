@@ -270,6 +270,51 @@
   @media (max-width: 800px) {
     .charts-row { grid-template-columns: 1fr; }
   }
+
+  /* Mobile responsive overhaul */
+  @media (max-width: 768px) {
+    header {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 14px;
+      padding: 16px 16px;
+    }
+    header h1 { text-align: center; font-size: 17px; }
+    .date-controls {
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
+    }
+    .date-controls button { width: 100%; margin-top: 4px; }
+    .paye-link { text-align: center; margin: 0 0 4px 0; }
+    .presets {
+      padding: 10px 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .preset-divider { display: none; }
+    main { padding: 14px; }
+    .vat-card { padding: 18px 16px; }
+    .vat-card .vat-top { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .vat-card .vat-figure { font-size: 18px; }
+    .cards { grid-template-columns: 1fr; gap: 10px; }
+    .card .value { font-size: 24px; }
+    /* Tables become horizontally scrollable as a whole unit rather than overflowing the page */
+    table { display: block; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+    thead, tbody, tr { display: table; width: 100%; table-layout: auto; }
+    section h2 { flex-wrap: wrap; gap: 8px; font-size: 13px; }
+    .month-header { flex-direction: column; align-items: flex-start; gap: 6px; }
+    .month-totals { flex-wrap: wrap; gap: 12px; }
+    .accept-all-btn { width: 100%; }
+    .fix-options { white-space: normal; }
+  }
+
+  @media (max-width: 420px) {
+    header h1 { font-size: 15px; }
+    .vat-card .vat-figure { font-size: 16px; }
+    .card .value { font-size: 20px; }
+    .vat-note, .vat-trajectory, .vat-gtu-box { font-size: 14px; }
+  }
   .badge {
     background: #fef2f2;
     color: var(--expense);
@@ -1021,8 +1066,17 @@
         ? `<strong style="color:var(--expense)">this would put you over the £90,000 threshold by month-end.</strong>`
         : `this would leave your rolling total at roughly ${fmt(cm.projectedRollingTotal)} by month-end.`;
 
+      const gtuLine = (cm.monthGtuActual !== null)
+        ? `<div style="margin-top:8px;">GoTeamUp actual charges this month: <strong>${fmt(cm.monthGtuActual)}</strong>` +
+          (cm.usingGtuBasis
+            ? ` <span style="color:var(--expense);">— higher than bank deposits, used as the basis for the projection below since it's more accurate.</span>`
+            : ``) +
+          `</div>`
+        : '';
+
       document.getElementById('vatMonthTrajectory').innerHTML =
-        `<div>This month so far: <strong>${fmt(cm.monthActualSoFar)}</strong> in${confidenceNote}.</div>` +
+        `<div>This month so far (bank deposits): <strong>${fmt(cm.monthActualSoFar)}</strong> in${confidenceNote}.</div>` +
+        gtuLine +
         `<div style="margin-top:8px;">At this daily pace (~${fmt(cm.projectedMonthTotal / cm.daysInMonth)}/day), ` +
         `you're on track for roughly <strong>${fmt(cm.projectedMonthTotal)}</strong> this month — ${overtext}</div>`;
     }
