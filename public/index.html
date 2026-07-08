@@ -988,7 +988,16 @@
     window.open(`/report/${kind}?from=${from}&to=${to}&key=${KEY}`, '_blank');
   }
 
-  function toISODate(d) { return d.toISOString().slice(0, 10); }
+  function toISODate(d) {
+    // Build the date string from local year/month/day directly — going via toISOString()
+    // converts through UTC first, which silently shifts the date back a day for anyone in a
+    // timezone ahead of UTC (e.g. UK during BST), since local midnight becomes 11pm the day
+    // before once converted to UTC.
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
 
   function setPreset(kind) {
     const today = new Date();
@@ -1109,7 +1118,7 @@
   }
 
   // Default range: tax year start to today
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toISODate(new Date());
   document.getElementById('from').value = '2026-04-06';
   document.getElementById('to').value = today;
 
