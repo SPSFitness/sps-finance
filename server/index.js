@@ -17,18 +17,47 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// Manually trigger a sync right now — needed because the free Render tier spins the server
-// down after inactivity, so the scheduled 6am cron below only fires if something happens to
-// have woken the server up around that time. This button (and the Render Cron Job described
-// in the README) are the reliable ways to actually get fresh data in.
+// How many days each sync re-pulls. Widened from 7 to 45 so a missed/failed run still gets
+// caught on the next successful sync rather than the transaction being permanently skipped
+// once it ages out of a narrow window.
+const SYNC_DAYS = Number(process.env.SYNC_DAYS) || 45;
+
 const { getPaidInvoiceLineItems } = require('./goteamup');
 
+// Shared GoTeamUp refresh logic, used by both the normal sync and the deep catch-up.
+async function refreshGoTeamUp() {
+  if (!process.env.GOTEAMUP_API_TOKEN) return null;
+  try {
+    const gtuRows = await getPaidInvoiceLineItems();
+    let gtuInserted = 0;
+    for (const row of gtuRows) {
+      const gtuPaymentId = `api-${row.id}`;
+      const planName = (row.billed_item && row.billed_item.membership && row.billed_item.membership.name)
+        || row.description || row.type;
+      const amount = row.amount ? row.amount.decimal : 0;
+      const chargedAt = row.invoice.paid_at.slice(0, 10);
+      const insertResult = await pool.query(
+        `INSERT INTO gtu_payments (gtu_payment_id, plan_name, category, amount, payment_method, charged_at, raw)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (gtu_payment_id) DO NOTHING
+         RETURNING id`,
+        [gtuPaymentId, planName, row.type || 'other', amount, 'api', chargedAt, JSON.stringify(row)]
+      );
+      if (insertResult.rows.length > 0) gtuInserted++;
+    }
+    return { checked: gtuRows.length, inserted: gtuInserted };
+  } catch (gtuErr) {
+    return { error: gtuErr.message };
+  }
+}
+
+// Normal "Sync Now" — re-pulls the last SYNC_DAYS (45) of bank transactions plus GoTeamUp.
 app.post('/api/sync-now', requireAuth, async (req, res) => {
   try {
     const { rows: accounts } = await pool.query(`SELECT * FROM accounts`);
     const to = new Date().toISOString();
     const fromDate = new Date();
-    fromDate.setDate(fromDate.getDate() - 7);
+    fromDate.setDate(fromDate.getDate() - SYNC_DAYS);
     const from = fromDate.toISOString();
 
     const results = [];
@@ -37,36 +66,33 @@ app.post('/api/sync-now', requireAuth, async (req, res) => {
       results.push({ account: account.display_name, ...result });
     }
 
-    // Also refresh GoTeamUp data, if a token is configured — keeps the VAT cross-check
-    // showing genuinely current data rather than whatever was last pulled manually.
-    let gtuResult = null;
-    if (process.env.GOTEAMUP_API_TOKEN) {
-      try {
-        const gtuRows = await getPaidInvoiceLineItems();
-        let gtuInserted = 0;
-        for (const row of gtuRows) {
-          const gtuPaymentId = `api-${row.id}`;
-          const planName = (row.billed_item && row.billed_item.membership && row.billed_item.membership.name)
-            || row.description || row.type;
-          const amount = row.amount ? row.amount.decimal : 0;
-          const chargedAt = row.invoice.paid_at.slice(0, 10);
+    const gtuResult = await refreshGoTeamUp();
+    res.json({ ok: true, results, gtuResult });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
-          const insertResult = await pool.query(
-            `INSERT INTO gtu_payments (gtu_payment_id, plan_name, category, amount, payment_method, charged_at, raw)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (gtu_payment_id) DO NOTHING
-             RETURNING id`,
-            [gtuPaymentId, planName, row.type || 'other', amount, 'api', chargedAt, JSON.stringify(row)]
-          );
-          if (insertResult.rows.length > 0) gtuInserted++;
-        }
-        gtuResult = { checked: gtuRows.length, inserted: gtuInserted };
-      } catch (gtuErr) {
-        gtuResult = { error: gtuErr.message };
-      }
+// Deep catch-up — re-pulls a much wider window (default 90 days, overridable via ?days=N up to
+// 400) to recover transactions that were permanently missed during past sync failures. Safe to
+// run any time: existing transactions are skipped, only genuinely-missing ones get inserted.
+app.post('/api/catch-up', requireAuth, async (req, res) => {
+  try {
+    const days = Math.min(Number(req.query.days) || 90, 400);
+    const { rows: accounts } = await pool.query(`SELECT * FROM accounts`);
+    const to = new Date().toISOString();
+    const fromDate = new Date();
+    fromDate.setDate(fromDate.getDate() - days);
+    const from = fromDate.toISOString();
+
+    const results = [];
+    for (const account of accounts) {
+      const result = await ingestForAccount(account, from, to, 'catchup');
+      results.push({ account: account.display_name, ...result });
     }
 
-    res.json({ ok: true, results, gtuResult });
+    const gtuResult = await refreshGoTeamUp();
+    res.json({ ok: true, daysScanned: days, results, gtuResult });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -92,11 +118,6 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
   const threshold = 90000;
   const total = Number(rows[0].total);
 
-  // Projection: compare the last 3 months' average trading income against the 3 months about
-  // to drop off the back of the 12-month window (10-12 months ago). If income is trending up,
-  // estimate how many months until the rolling total crosses the threshold. This is a rough
-  // heads-up based on recent trend, not a certified forecast — treat it as a prompt to check
-  // in with an accountant, not as the actual compliance figure.
   const { rows: monthlyRows } = await pool.query(
     `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month, SUM(t.amount) as total
      FROM transactions t
@@ -112,7 +133,7 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
   if (monthlyRows.length >= 13) {
     const monthTotals = monthlyRows.map(r => Number(r.total));
     const recent3 = monthTotals.slice(-3);
-    const rollingOff3 = monthTotals.slice(-13, -10); // the 3 oldest months still inside the current window
+    const rollingOff3 = monthTotals.slice(-13, -10);
     const avgRecent = recent3.reduce((a, b) => a + b, 0) / recent3.length;
     const avgRollingOff = rollingOff3.length === 3 ? rollingOff3.reduce((a, b) => a + b, 0) / rollingOff3.length : null;
 
@@ -134,10 +155,6 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
     }
   }
 
-  // Current month trajectory — based on this month's actual pace so far, extrapolated to
-  // month-end, then swapped into the rolling total to see where that would leave you.
-  // Early in a month this is noisy (2 days of data tells you little) — flagged in the response
-  // so the dashboard can show an appropriate caveat rather than present it as solid.
   const now = new Date();
   const daysElapsedInMonth = now.getDate();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
@@ -154,9 +171,6 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
 
   const monthActualSoFar = Number(currentMonthRows[0].total);
 
-  // Cross-check this month specifically against GoTeamUp's actual charges, not just bank
-  // deposits — bank data lags real charges by several days due to payment processor batching,
-  // so early in a month the bank-based figure can badly understate what's actually been charged.
   let monthGtuActual = null;
   try {
     const { rows: gtuMonthRows } = await pool.query(
@@ -165,12 +179,9 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
     );
     monthGtuActual = Number(gtuMonthRows[0].total);
   } catch (err) {
-    monthGtuActual = null; // gtu_payments table may not exist yet
+    monthGtuActual = null;
   }
 
-  // Use whichever figure is higher as the projection basis — GoTeamUp actual charges are more
-  // accurate when available, and using the higher of the two errs on the side of catching a
-  // threshold breach early rather than being falsely reassured by lagging bank data.
   const projectionBasis = (monthGtuActual !== null && monthGtuActual > monthActualSoFar) ? monthGtuActual : monthActualSoFar;
   const usingGtuBasis = projectionBasis === monthGtuActual && monthGtuActual > monthActualSoFar;
 
@@ -187,12 +198,9 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
     projectedMonthTotal,
     projectedRollingTotal,
     projectedOverThreshold: projectedRollingTotal >= threshold,
-    lowConfidence: daysElapsedInMonth < 7 // early in the month, extrapolation is noisy
+    lowConfidence: daysElapsedInMonth < 7
   };
 
-  // Cross-check against GoTeamUp's actual charged amounts, where available — bank deposits are
-  // net of processing fees and can lag or batch differently than when the sale was actually made,
-  // so this is a more accurate source for genuine taxable turnover where we have it.
   let gtuComparison = null;
   try {
     const { rows: gtuRows } = await pool.query(
@@ -212,7 +220,6 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
       gtuOverThreshold: gtuTotal >= threshold
     };
   } catch (err) {
-    // gtu_payments table may not exist yet — fine, just skip the comparison
     gtuComparison = null;
   }
 
@@ -258,8 +265,6 @@ app.get('/api/summary', requireAuth, async (req, res) => {
   res.json(rows);
 });
 
-// Individual transactions within a category, for a date range — lets the dashboard drill down
-// from a category total into the actual transactions behind it, to spot-check accuracy.
 app.get('/api/transactions-by-category', requireAuth, async (req, res) => {
   const { category_id, from, to } = req.query;
   const { rows } = await pool.query(
@@ -272,7 +277,6 @@ app.get('/api/transactions-by-category', requireAuth, async (req, res) => {
   res.json(rows);
 });
 
-// Transactions flagged for manual review
 app.get('/api/review', requireAuth, async (req, res) => {
   const { rows } = await pool.query(
     `SELECT t.*, c.name as category_name FROM transactions t
@@ -283,8 +287,6 @@ app.get('/api/review', requireAuth, async (req, res) => {
   res.json(rows);
 });
 
-// Accept every transaction currently in the review queue as-is (whatever category it currently
-// shows, whether AI-guessed or rule-matched) — clears the queue in one go.
 app.post('/api/review/accept-all', requireAuth, async (req, res) => {
   const result = await pool.query(
     `UPDATE transactions SET needs_review = false WHERE needs_review = true RETURNING id`
@@ -292,8 +294,6 @@ app.post('/api/review/accept-all', requireAuth, async (req, res) => {
   res.json({ ok: true, cleared: result.rows.length });
 });
 
-// Manually fix a category — optionally creates a rule so future matches skip the AI entirely,
-// and optionally applies the same fix to every other transaction with the same description.
 app.post('/api/transactions/:id/category', requireAuth, async (req, res) => {
   const { category_id, create_rule, apply_to_similar } = req.body;
 
@@ -315,7 +315,6 @@ app.post('/api/transactions/:id/category', requireAuth, async (req, res) => {
   }
 
   if (create_rule && txn.description_raw) {
-    // Priority 20 — checked after any hand-tuned rules (priority 5-10) but before the AI ever runs
     await pool.query(
       `INSERT INTO category_rules (category_id, match_type, match_value, priority)
        VALUES ($1, 'description_contains', $2, 20)`,
@@ -326,8 +325,6 @@ app.post('/api/transactions/:id/category', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Printable Profit & Loss report — formatted for browser Print > Save as PDF, so accountants
-// get a proper document without needing a heavy PDF library on a free-tier server.
 app.get('/report/profit-loss', async (req, res) => {
   const { from, to, key } = req.query;
   if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
@@ -384,7 +381,6 @@ app.get('/report/profit-loss', async (req, res) => {
 </body></html>`);
 });
 
-// Raw transaction export as CSV — for importing into accounting software or handing to an accountant
 app.get('/report/transactions-csv', async (req, res) => {
   const { from, to, key } = req.query;
   if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
@@ -409,7 +405,6 @@ app.get('/report/transactions-csv', async (req, res) => {
   res.send(header + body);
 });
 
-// Save a calculated payslip for record-keeping
 app.post('/api/payslips', requireAuth, async (req, res) => {
   const { employee_name, pay_period_end, tax_code, ni_category, ni_number, student_loan_plan,
           gross_pay, income_tax, employee_ni, employer_ni, student_loan, net_pay } = req.body;
@@ -444,7 +439,6 @@ app.get('/api/sync-log', requireAuth, async (req, res) => {
   res.json(rows);
 });
 
-// Daily sync at 6am — catches yesterday's transactions plus anything that settled late
 cron.schedule('0 6 * * *', () => {
   console.log('Running scheduled daily sync...');
   exec('node server/sync.js', (err, stdout, stderr) => {
