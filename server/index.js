@@ -76,7 +76,8 @@ app.post('/api/sync-now', requireAuth, async (req, res) => {
 // Deep catch-up — re-pulls a much wider window (default 90 days, overridable via ?days=N up to
 // 400) to recover transactions that were permanently missed during past sync failures. Safe to
 // run any time: existing transactions are skipped, only genuinely-missing ones get inserted.
-app.post('/api/catch-up', requireAuth, async (req, res) => {
+// Uses app.all so it can be triggered by simply visiting the URL in a browser (GET) as well as POST.
+app.all('/api/catch-up', requireAuth, async (req, res) => {
   try {
     const days = Math.min(Number(req.query.days) || 90, 400);
     const { rows: accounts } = await pool.query(`SELECT * FROM accounts`);
@@ -378,6 +379,120 @@ app.get('/report/profit-loss', async (req, res) => {
   <tbody>${rowsHtml(expenses, true)}<tr class="total-row"><td>Total Expenses</td><td></td><td style="text-align:right">${fmt(totalExpense)}</td></tr></tbody></table>
 
   <table><tbody><tr class="net-row"><td>Net Profit</td><td></td><td style="text-align:right; color:${net >= 0 ? '#0f9d58' : '#d93025'}">${fmt(net)}</td></tr></tbody></table>
+</body></html>`);
+});
+
+// VAT estimate report (Flat Rate Scheme). Bank-deposit basis — money actually received, matching
+// the previous QuickBooks / cash-accounting setup. Shows gross trading income per month with the
+// flat-rate VAT at BOTH 8.5% and 16.5% side by side, plus a running total, so whichever rate the
+// accountant confirms the figure is ready. Set ?from= to the effective registration date for the
+// true "set aside" figure. Optional ?rate= (e.g. 0.075) overrides the headline 8.5% rate.
+app.get('/report/vat', async (req, res) => {
+  const { from, to, key, rate } = req.query;
+  if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
+
+  const fromDate = from || '2026-04-06';
+  const toDate = to || new Date().toISOString().slice(0, 10);
+  const headlineRate = rate ? Number(rate) : 0.085;
+
+  const { rows } = await pool.query(
+    `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month,
+            SUM(t.amount) as gross_income, COUNT(*) as txn_count
+     FROM transactions t
+     JOIN categories c ON c.id = t.category_id
+     WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
+       AND t.txn_date BETWEEN $1 AND $2
+     GROUP BY month
+     ORDER BY month ASC`,
+    [fromDate, toDate]
+  );
+
+  const fmt = (n) => (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pct = (headlineRate * 100).toLocaleString('en-GB', { maximumFractionDigits: 2 });
+
+  let totalGross = 0;
+  let running = 0;
+  const bodyRows = rows.map(r => {
+    const gross = Number(r.gross_income);
+    totalGross += gross;
+    running += gross;
+    return `<tr>
+      <td>${r.month}</td>
+      <td style="text-align:right">${r.txn_count}</td>
+      <td style="text-align:right">${fmt(gross)}</td>
+      <td style="text-align:right">${fmt(gross * headlineRate)}</td>
+      <td style="text-align:right; color:#6b7280">${fmt(gross * 0.165)}</td>
+      <td style="text-align:right; font-weight:600">${fmt(running * headlineRate)}</td>
+    </tr>`;
+  }).join('');
+
+  const totalVatHeadline = totalGross * headlineRate;
+  const totalVat165 = totalGross * 0.165;
+
+  res.send(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>VAT Estimate — SPS Fitness</title>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; max-width: 900px; margin: 40px auto; color: #0b0b0f; padding: 0 20px; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase; color: #6b7280; padding: 8px 6px; border-bottom: 2px solid #0b0b0f; }
+  td { padding: 8px 6px; border-bottom: 1px solid #f1f3f5; }
+  .total-row td { font-weight: 700; border-top: 2px solid #0b0b0f; border-bottom: none; padding-top: 12px; font-size: 14px; }
+  .headline { background: #f8f9ff; border: 1px solid #dce3ff; border-radius: 10px; padding: 20px; margin: 20px 0; }
+  .headline .big { font-size: 28px; font-weight: 800; color: #1a4dff; }
+  .headline .lbl { font-size: 12px; text-transform: uppercase; color: #6b7280; font-weight: 600; letter-spacing: 0.04em; }
+  .notes { font-size: 12px; color: #6b7280; line-height: 1.6; margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px; }
+  .notes strong { color: #0b0b0f; }
+  .print-btn { position: fixed; top: 20px; right: 20px; background: #1a4dff; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+  .warn { background: #fff4e5; border: 1px solid #ffd699; border-radius: 8px; padding: 12px 16px; font-size: 12px; color: #92600a; margin: 16px 0; line-height: 1.5; }
+  @media print { .print-btn { display: none; } body { max-width: none; } }
+</style></head>
+<body>
+  <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
+  <h1>SPS Fitness — VAT Estimate (Flat Rate Scheme)</h1>
+  <div class="sub">Period: ${fromDate} to ${toDate} · Generated ${new Date().toLocaleDateString('en-GB')} · Bank-deposit basis (money received)</div>
+
+  <div class="headline">
+    <div class="lbl">Estimated VAT to set aside at ${pct}% (flat rate, bank basis)</div>
+    <div class="big">${fmt(totalVatHeadline)}</div>
+    <div style="font-size:12px; color:#6b7280; margin-top:6px;">on gross trading income of ${fmt(totalGross)} · at 16.5% this would be ${fmt(totalVat165)}</div>
+  </div>
+
+  <div class="warn">
+    <strong>For the accountant to confirm:</strong> this uses ${pct}% on a bank-deposit (cash) basis, matching the previous QuickBooks setup.
+    If the Limited Cost Trader rule applies (low goods spend), the rate would be 16.5% — that column is shown alongside so the figure is ready either way.
+    VAT is only owed from the effective registration date onward — set the "from" date to that date (once HMRC confirms it) to get the true set-aside figure.
+  </div>
+
+  <table>
+    <thead><tr>
+      <th>Month</th>
+      <th style="text-align:right">Transactions</th>
+      <th style="text-align:right">Gross Income (banked)</th>
+      <th style="text-align:right">VAT @ ${pct}%</th>
+      <th style="text-align:right">VAT @ 16.5%</th>
+      <th style="text-align:right">Running VAT @ ${pct}%</th>
+    </tr></thead>
+    <tbody>
+      ${bodyRows}
+      <tr class="total-row">
+        <td>TOTAL</td><td></td>
+        <td style="text-align:right">${fmt(totalGross)}</td>
+        <td style="text-align:right">${fmt(totalVatHeadline)}</td>
+        <td style="text-align:right; color:#6b7280">${fmt(totalVat165)}</td>
+        <td style="text-align:right">${fmt(totalVatHeadline)}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="notes">
+    <strong>Basis of this report:</strong><br>
+    • <strong>Bank-deposit basis</strong> — counts income when it actually landed in the bank (net of Stripe/GoCardless fees), matching the previous QuickBooks / cash-accounting approach.<br>
+    • <strong>Trading income only</strong> — memberships, PT, retreats, clothing, etc. Excludes owner drawings, transfers between accounts, and loan repayments, none of which are VAT-able turnover.<br>
+    • <strong>Flat Rate Scheme</strong> — VAT owed is simply a flat percentage of gross turnover; you do not reclaim VAT on purchases (except single capital assets over £2,000).<br>
+    • <strong>This is an estimate to aid setting funds aside and to hand to your accountant</strong> — not a filed VAT return. Your accountant confirms the correct rate, registration date, and quarter cycle.
+  </div>
 </body></html>`);
 });
 
