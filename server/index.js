@@ -496,6 +496,132 @@ app.get('/report/vat', async (req, res) => {
 </body></html>`);
 });
 
+
+// Walks every month-end and computes the rolling 12-month trading-income total ending that
+// month, on BOTH bank basis (transactions) and GoTeamUp basis (gtu_payments). Flags the first
+// month each basis exceeds £90,000, and applies HMRC's registration rule: you must register by
+// the 1st of the SECOND month after the month you breached, and that 1st is your effective date.
+app.get('/report/vat-breach', async (req, res) => {
+  const { key } = req.query;
+  if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
+
+  const THRESHOLD = 90000;
+
+  // Bank basis: trading income per calendar month
+  const { rows: bankMonths } = await pool.query(
+    `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month, SUM(t.amount) as total
+     FROM transactions t
+     JOIN categories c ON c.id = t.category_id
+     WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
+     GROUP BY month ORDER BY month ASC`
+  );
+
+  // GoTeamUp basis: charges per calendar month (may not exist — handle gracefully)
+  let gtuMonths = [];
+  try {
+    const r = await pool.query(
+      `SELECT to_char(date_trunc('month', charged_at), 'YYYY-MM') as month, SUM(amount) as total
+       FROM gtu_payments GROUP BY month ORDER BY month ASC`
+    );
+    gtuMonths = r.rows;
+  } catch (e) { gtuMonths = []; }
+
+  // Build a unified sorted list of all months present in either dataset
+  const monthSet = new Set([...bankMonths.map(r => r.month), ...gtuMonths.map(r => r.month)]);
+  const months = [...monthSet].sort();
+
+  const bankMap = Object.fromEntries(bankMonths.map(r => [r.month, Number(r.total)]));
+  const gtuMap = Object.fromEntries(gtuMonths.map(r => [r.month, Number(r.total)]));
+
+  // Rolling 12-month total ending at each month (inclusive of that month and 11 before)
+  function rolling12(map, endMonth) {
+    const [y, m] = endMonth.split('-').map(Number);
+    let sum = 0;
+    for (let i = 0; i < 12; i++) {
+      let mm = m - i, yy = y;
+      while (mm <= 0) { mm += 12; yy -= 1; }
+      const key = `${yy}-${String(mm).padStart(2, '0')}`;
+      sum += (map[key] || 0);
+    }
+    return sum;
+  }
+
+  // Effective registration date from a breach month: 1st of the 2nd month after it
+  function effectiveDate(breachMonth) {
+    const [y, m] = breachMonth.split('-').map(Number);
+    let mm = m + 2, yy = y;
+    while (mm > 12) { mm -= 12; yy += 1; }
+    return `${yy}-${String(mm).padStart(2, '0')}-01`;
+  }
+
+  const fmt = (n) => (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  let bankBreach = null, gtuBreach = null;
+  const rowsHtml = months.map(month => {
+    const bankRoll = rolling12(bankMap, month);
+    const gtuRoll = rolling12(gtuMap, month);
+    if (!bankBreach && bankRoll > THRESHOLD) bankBreach = month;
+    if (!gtuBreach && gtuRoll > THRESHOLD) gtuBreach = month;
+    const bankOver = bankRoll > THRESHOLD;
+    const gtuOver = gtuRoll > THRESHOLD;
+    const bankFirst = bankBreach === month;
+    const gtuFirst = gtuBreach === month;
+    return `<tr${(bankFirst || gtuFirst) ? ' style="background:#fff4e5"' : ''}>
+      <td>${month}</td>
+      <td style="text-align:right; ${bankOver ? 'color:#d93025;font-weight:700' : ''}">${fmt(bankRoll)}${bankFirst ? ' ⚠️' : ''}</td>
+      <td style="text-align:right; ${gtuOver ? 'color:#d93025;font-weight:700' : 'color:#6b7280'}">${gtuRoll > 0 ? fmt(gtuRoll) : '—'}${gtuFirst ? ' ⚠️' : ''}</td>
+    </tr>`;
+  }).join('');
+
+  const bankResult = bankBreach
+    ? `Bank basis crossed £90k at end of <strong>${bankBreach}</strong> → register effective <strong>${effectiveDate(bankBreach)}</strong>`
+    : `Bank basis has not crossed £90k in the data held.`;
+  const gtuResult = gtuBreach
+    ? `GoTeamUp basis crossed £90k at end of <strong>${gtuBreach}</strong> → register effective <strong>${effectiveDate(gtuBreach)}</strong>`
+    : `GoTeamUp basis has not crossed £90k in the data held.`;
+
+  res.send(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>VAT Threshold Breach — SPS Fitness</title>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; max-width: 780px; margin: 40px auto; color: #0b0b0f; padding: 0 20px; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase; color: #6b7280; padding: 8px 6px; border-bottom: 2px solid #0b0b0f; }
+  td { padding: 8px 6px; border-bottom: 1px solid #f1f3f5; }
+  .result { background: #f8f9ff; border: 1px solid #dce3ff; border-radius: 10px; padding: 16px 20px; margin: 8px 0; font-size: 14px; line-height: 1.7; }
+  .notes { font-size: 12px; color: #6b7280; line-height: 1.6; margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px; }
+  .notes strong { color: #0b0b0f; }
+  .print-btn { position: fixed; top: 20px; right: 20px; background: #1a4dff; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+  @media print { .print-btn { display: none; } body { max-width: none; } }
+</style></head>
+<body>
+  <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
+  <h1>SPS Fitness — VAT Threshold Breach Analysis</h1>
+  <div class="sub">Rolling 12-month trading income at each month-end · Generated ${new Date().toLocaleDateString('en-GB')} · Threshold £90,000</div>
+
+  <div class="result">${bankResult}</div>
+  <div class="result">${gtuResult}</div>
+
+  <table>
+    <thead><tr>
+      <th>Month end</th>
+      <th style="text-align:right">Rolling 12mth — Bank basis</th>
+      <th style="text-align:right">Rolling 12mth — GoTeamUp basis</th>
+    </tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+
+  <div class="notes">
+    <strong>How to read this:</strong> each row is the total trading income for the 12 months ending that month.
+    The ⚠️ marks the first month each basis exceeded £90,000. Figures in red are over the threshold.<br><br>
+    <strong>HMRC registration rule applied:</strong> if you breach at the end of a given month, you must register by the 1st of the second month after — and that date becomes your effective registration date (the date VAT liability starts).<br><br>
+    <strong>Bank basis</strong> matches the previous QuickBooks / cash-accounting approach and is the more likely basis for assessment. <strong>GoTeamUp basis</strong> (charges) is shown alongside as a cross-check — it typically breaches earlier since it excludes fees and payout lag.<br><br>
+    <strong>This is an analysis to hand to your accountant, not a filed determination.</strong> It's only as accurate as the categorised data behind it — confirm the breach month and effective date with your accountant before registering.
+  </div>
+</body></html>`);
+});
+
 app.get('/report/transactions-csv', async (req, res) => {
   const { from, to, key } = req.query;
   if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
