@@ -121,30 +121,32 @@
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 18px 20px;
+    padding: 24px 28px;
     margin-bottom: 20px;
   }
   .vat-card .vat-top {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    margin-bottom: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .vat-card .vat-label {
-    font-size: 12px;
+    font-size: 14px;
     color: var(--grey);
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    font-weight: 600;
+    font-weight: 700;
   }
   .vat-card .vat-figure {
-    font-size: 13px;
-    font-weight: 700;
+    font-size: 20px;
+    font-weight: 800;
   }
   .vat-bar-track {
     background: #f1f3f5;
     border-radius: 100px;
-    height: 10px;
+    height: 14px;
     overflow: hidden;
   }
   .vat-bar-fill {
@@ -156,9 +158,41 @@
   .vat-bar-fill.warn { background: #f59e0b; }
   .vat-bar-fill.danger { background: var(--expense); }
   .vat-note {
-    font-size: 12px;
+    font-size: 16px;
     color: var(--grey);
+    margin-top: 16px;
+    line-height: 1.6;
+  }
+  .vat-note-caveat {
+    font-size: 13px;
+    opacity: 0.75;
+    display: block;
     margin-top: 8px;
+  }
+  .vat-trajectory {
+    font-size: 16px;
+    color: var(--black);
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px dashed var(--border);
+    line-height: 1.6;
+  }
+  .vat-gtu-box {
+    font-size: 16px;
+    color: var(--black);
+    margin-top: 18px;
+    padding: 20px;
+    background: #f8f9ff;
+    border: 1px solid #dce3ff;
+    border-radius: 10px;
+    line-height: 1.6;
+  }
+  .vat-gtu-box strong { font-weight: 700; }
+  .vat-gtu-box .vat-gtu-caveat {
+    font-size: 13px;
+    opacity: 0.75;
+    display: block;
+    margin-top: 10px;
   }
   main {
     max-width: 1100px;
@@ -235,6 +269,51 @@
   }
   @media (max-width: 800px) {
     .charts-row { grid-template-columns: 1fr; }
+  }
+
+  /* Mobile responsive overhaul */
+  @media (max-width: 768px) {
+    header {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 14px;
+      padding: 16px 16px;
+    }
+    header h1 { text-align: center; font-size: 17px; }
+    .date-controls {
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
+    }
+    .date-controls button { width: 100%; margin-top: 4px; }
+    .paye-link { text-align: center; margin: 0 0 4px 0; }
+    .presets {
+      padding: 10px 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .preset-divider { display: none; }
+    main { padding: 14px; }
+    .vat-card { padding: 18px 16px; }
+    .vat-card .vat-top { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .vat-card .vat-figure { font-size: 18px; }
+    .cards { grid-template-columns: 1fr; gap: 10px; }
+    .card .value { font-size: 24px; }
+    /* Tables become horizontally scrollable as a whole unit rather than overflowing the page */
+    table { display: block; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+    thead, tbody, tr { display: table; width: 100%; table-layout: auto; }
+    section h2 { flex-wrap: wrap; gap: 8px; font-size: 13px; }
+    .month-header { flex-direction: column; align-items: flex-start; gap: 6px; }
+    .month-totals { flex-wrap: wrap; gap: 12px; }
+    .accept-all-btn { width: 100%; }
+    .fix-options { white-space: normal; }
+  }
+
+  @media (max-width: 420px) {
+    header h1 { font-size: 15px; }
+    .vat-card .vat-figure { font-size: 16px; }
+    .card .value { font-size: 20px; }
+    .vat-note, .vat-trajectory, .vat-gtu-box { font-size: 14px; }
   }
   .badge {
     background: #fef2f2;
@@ -418,6 +497,10 @@
   <button onclick="openReport('profit-loss')">📄 Profit & Loss (PDF)</button>
   <button onclick="openReport('transactions-csv')">📊 Export Transactions (CSV)</button>
   <span class="preset-divider"></span>
+  <button onclick="openVatReport('vat-summary')">💷 VAT Set-Aside Summary</button>
+  <button onclick="openVatReport('vat-breach')">📈 VAT Breach Analysis</button>
+  <button onclick="openVatReport('vat')">📋 VAT Detail</button>
+  <span class="preset-divider"></span>
   <button onclick="syncNow()" id="syncBtn">🔄 Sync Now</button>
 </div>
 
@@ -431,6 +514,16 @@
     </div>
     <div class="vat-bar-track"><div class="vat-bar-fill ok" id="vatBarFill" style="width:0%"></div></div>
     <div class="vat-note" id="vatNote"></div>
+    <div class="vat-trajectory" id="vatMonthTrajectory"></div>
+    <div class="vat-gtu-box" id="vatGtuComparison" style="display:none;"></div>
+  </div>
+
+  <div class="vat-card" id="vatPositionCard" style="display:none;">
+    <div class="vat-top">
+      <span class="vat-label">VAT to set aside — estimated amount owed to date</span>
+      <span class="vat-figure" id="vatPositionHeadline"></span>
+    </div>
+    <div class="vat-note" id="vatPositionBody"></div>
   </div>
 
   <div class="cards">
@@ -506,6 +599,13 @@
   function formatDateReadable(isoDate) {
     const d = new Date(isoDate);
     return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  // Short dd/mm/yyyy format for compact table rows — strips any time component (T00:00:00.000Z etc)
+  function formatDateShort(isoDate) {
+    if (!isoDate) return '';
+    const d = new Date(isoDate);
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
   }
 
   function monthLabel(monthStr) {
@@ -761,7 +861,7 @@
         `<option value="${c.id}" ${c.id === r.category_id ? 'selected' : ''}>${c.name}</option>`
       ).join('');
       tr.innerHTML = `
-        <td>${r.txn_date}</td>
+        <td>${formatDateShort(r.txn_date)}</td>
         <td>${r.description_raw}${r.category_confidence ? `<div class="conf">AI confidence: ${(r.category_confidence * 100).toFixed(0)}%</div>` : ''}</td>
         <td class="amount ${r.amount >= 0 ? 'pos' : 'neg'}">${fmt(r.amount)}</td>
         <td><select id="cat-${r.id}">${options}</select></td>
@@ -812,7 +912,7 @@
       ).join('');
       return `
       <tr>
-        <td>${t.txn_date}</td>
+        <td>${formatDateShort(t.txn_date)}</td>
         <td>${t.description_raw}${t.merchant_name ? ` <span class="drill-merchant">(${t.merchant_name})</span>` : ''}</td>
         <td class="amount ${Number(t.amount) >= 0 ? 'pos' : 'neg'}">${fmt(t.amount)}</td>
         <td class="drill-source">${t.categorized_by}${t.starling_spending_category ? ` · ${t.starling_spending_category}` : ''}${t.category_confidence ? ` · ${(t.category_confidence*100).toFixed(0)}%` : ''}</td>
@@ -874,7 +974,15 @@
       const data = await res.json();
       if (data.ok) {
         const totalNew = data.results.reduce((s, r) => s + (r.inserted || 0), 0);
-        alert(`Sync complete. ${totalNew} new transaction(s) found and categorised.`);
+        let message = `Sync complete. ${totalNew} new bank transaction(s) found and categorised.`;
+        if (data.gtuResult) {
+          if (data.gtuResult.error) {
+            message += `\n\nGoTeamUp sync failed: ${data.gtuResult.error}`;
+          } else {
+            message += `\n\nGoTeamUp: checked ${data.gtuResult.checked} paid invoice lines, ${data.gtuResult.inserted} new.`;
+          }
+        }
+        alert(message);
         loadSummary(); loadMonthly(); loadReview(); loadVatCheck();
       } else {
         alert('Sync failed: ' + data.error);
@@ -892,7 +1000,49 @@
     window.open(`/report/${kind}?from=${from}&to=${to}&key=${KEY}`, '_blank');
   }
 
-  function toISODate(d) { return d.toISOString().slice(0, 10); }
+  function openVatReport(kind) {
+    window.open(`/report/${kind}?key=${KEY}`, '_blank');
+  }
+
+  async function loadVatPosition() {
+    let data;
+    try {
+      data = await api('/api/vat-position');
+    } catch (e) { return; }
+    const card = document.getElementById('vatPositionCard');
+    const headline = document.getElementById('vatPositionHeadline');
+    const body = document.getElementById('vatPositionBody');
+    const bank = data.bankBasis;
+    const gtu = data.goteamupBasis;
+    const liveOwed = [];
+    if (bank && bank.liabilityStarted) liveOwed.push(bank.setAside_8_5);
+    if (gtu && gtu.liabilityStarted) liveOwed.push(gtu.setAside_8_5);
+    const headlineFigure = liveOwed.length ? Math.max(...liveOwed) : 0;
+    headline.textContent = fmt(headlineFigure) + ' (8.5%)';
+    function basisLine(label, b) {
+      if (!b) return `<div style="margin-top:10px;"><strong>${label}:</strong> no breach detected in the data held.</div>`;
+      if (!b.liabilityStarted) {
+        return `<div style="margin-top:10px;"><strong>${label}:</strong> crossed £90k at end of ${b.breachMonth} → registration effective <strong>${formatDateShort(b.registrationDate)}</strong>. Liability hasn't started yet — <strong>£0 to set aside so far</strong> under this basis.</div>`;
+      }
+      return `<div style="margin-top:10px;"><strong>${label}:</strong> registered effective <strong>${formatDateShort(b.registrationDate)}</strong>. On ${fmt(b.incomeSinceRegistration)} of income since then, you should have set aside <strong style="color:var(--expense)">${fmt(b.setAside_8_5)}</strong> at 8.5% (or <strong style="color:var(--expense)">${fmt(b.setAside_16_5)}</strong> if the 16.5% limited-cost rate applies).</div>`;
+    }
+    card.style.display = 'block';
+    body.innerHTML =
+      basisLine('Bank basis (matches QuickBooks)', bank) +
+      basisLine('GoTeamUp basis (charges — cross-check)', gtu) +
+      `<span class="vat-note-caveat">Which basis applies is your accountant's call. The 8.5% vs 16.5% rate depends on the limited-cost-trader test. These are estimates to guide how much to hold back — not a filed return.</span>`;
+  }
+
+  function toISODate(d) {
+    // Build the date string from local year/month/day directly — going via toISOString()
+    // converts through UTC first, which silently shifts the date back a day for anyone in a
+    // timezone ahead of UTC (e.g. UK during BST), since local midnight becomes 11pm the day
+    // before once converted to UTC.
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
 
   function setPreset(kind) {
     const today = new Date();
@@ -928,20 +1078,92 @@
       `${fmt(data.rollingTotal)} of ${fmt(data.threshold)}`;
 
     const note = document.getElementById('vatNote');
+    let noteText = '';
+    let noteColor = 'var(--grey)';
+
     if (pct >= 100) {
-      note.textContent = `You're over the £${data.threshold.toLocaleString('en-GB')} threshold — registration is likely required within 30 days if this holds. Check with your accountant.`;
-      note.style.color = 'var(--expense)';
+      noteText = `You're over the £${data.threshold.toLocaleString('en-GB')} threshold — registration is likely required within 30 days if this holds. Check with your accountant.`;
+      noteColor = 'var(--expense)';
     } else if (pct >= 90) {
-      note.textContent = `${fmt(data.remaining)} of headroom left before the threshold — worth a conversation with your accountant now.`;
-      note.style.color = '#b45309';
+      noteText = `${fmt(data.remaining)} of headroom left before the threshold — worth a conversation with your accountant now.`;
+      noteColor = '#b45309';
     } else {
-      note.textContent = `${fmt(data.remaining)} of headroom left before the £${data.threshold.toLocaleString('en-GB')} threshold, based on trading income over the last 12 months.`;
-      note.style.color = 'var(--grey)';
+      noteText = `${fmt(data.remaining)} of headroom left before the £${data.threshold.toLocaleString('en-GB')} threshold, based on trading income over the last 12 months.`;
+    }
+
+    // Projection line — a rough heads-up based on recent trend, not a certified forecast
+    let projectionText = '';
+    if (data.projection) {
+      if (data.projection.trending === 'up') {
+        const monthLabel = new Date(data.projection.projectedDate).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+        projectionText = ` At your recent run rate (trading income trending up by roughly ${fmt(data.projection.netMonthlyChange)}/month net), you're on track to cross the threshold around <strong>${monthLabel}</strong> if this pace continues.`;
+      } else if (data.projection.trending === 'flat-or-down') {
+        projectionText = ` Based on the last 3 months compared to what's rolling off the 12-month window, turnover isn't trending upward at the moment — no specific crossing date projected, but keep an eye on it.`;
+      } else if (data.projection.trending === 'over') {
+        projectionText = ``;
+      }
+    }
+
+    note.innerHTML = `<div>${noteText}</div>` +
+      (projectionText ? `<div style="margin-top:10px;">${projectionText.trim()}</div>` : '') +
+      `<span class="vat-note-caveat">Projection is a rough estimate based on recent trend, not a certified forecast — always confirm with your accountant.</span>`;
+    note.style.color = noteColor;
+
+    // Current month trajectory — a more immediate, daily-updating signal
+    if (data.currentMonthProjection) {
+      const cm = data.currentMonthProjection;
+      const confidenceNote = cm.lowConfidence
+        ? ` (only ${cm.daysElapsedInMonth} day${cm.daysElapsedInMonth === 1 ? '' : 's'} into the month so far — early, treat this loosely)`
+        : ` (${cm.daysElapsedInMonth} of ${cm.daysInMonth} days into the month)`;
+
+      const overtext = cm.projectedOverThreshold
+        ? `<strong style="color:var(--expense)">this would put you over the £90,000 threshold by month-end.</strong>`
+        : `this would leave your rolling total at roughly ${fmt(cm.projectedRollingTotal)} by month-end.`;
+
+      const gtuLine = (cm.monthGtuActual !== null)
+        ? `<div style="margin-top:8px;">GoTeamUp actual charges this month: <strong>${fmt(cm.monthGtuActual)}</strong>` +
+          (cm.usingGtuBasis
+            ? ` <span style="color:var(--expense);">— higher than bank deposits, used as the basis for the projection below since it's more accurate.</span>`
+            : ``) +
+          `</div>`
+        : '';
+
+      document.getElementById('vatMonthTrajectory').innerHTML =
+        `<div>This month so far (bank deposits): <strong>${fmt(cm.monthActualSoFar)}</strong> in${confidenceNote}.</div>` +
+        gtuLine +
+        `<div style="margin-top:8px;">At this daily pace (~${fmt(cm.projectedMonthTotal / cm.daysInMonth)}/day), ` +
+        `you're on track for roughly <strong>${fmt(cm.projectedMonthTotal)}</strong> this month — ${overtext}</div>`;
+    }
+
+    // GoTeamUp comparison — actual charged amounts vs what landed in the bank
+    const gtuBox = document.getElementById('vatGtuComparison');
+    if (data.gtuComparison) {
+      const g = data.gtuComparison;
+      const diffAbs = Math.abs(g.differenceFromBank);
+      const diffDirection = g.differenceFromBank > 0 ? 'higher' : 'lower';
+      const significant = diffAbs > 500;
+
+      gtuBox.style.display = 'block';
+      gtuBox.innerHTML = `
+        <div><strong>Cross-check against GoTeamUp actual charges:</strong> ${fmt(g.gtuTotal)}
+        (${g.txnCount} payment records, ${formatDateShort(g.earliest)} to ${formatDateShort(g.latest)})</div>
+        <div style="margin-top:8px;">This is <strong style="color:${significant ? 'var(--expense)' : 'var(--grey)'}">${fmt(diffAbs)} ${diffDirection}</strong>
+        than the bank-deposit figure of ${fmt(data.rollingTotal)}.</div>
+        ${g.gtuOverThreshold && !(data.rollingTotal >= data.threshold)
+          ? `<div style="margin-top:8px;"><strong style="color:var(--expense)">Based on actual charges rather than bank deposits, you may already be over the £90,000 threshold — this needs checking with your accountant urgently.</strong></div>`
+          : ''}
+        <span class="vat-gtu-caveat">
+          July–November 2025 in this figure is reconstructed from bank deposits (pre-GoTeamUp / PT Minder era) —
+          not independently verified charge data. December 2025 onward is real GoTeamUp export data.
+        </span>
+      `;
+    } else {
+      gtuBox.style.display = 'none';
     }
   }
 
   // Default range: tax year start to today
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toISODate(new Date());
   document.getElementById('from').value = '2026-04-06';
   document.getElementById('to').value = today;
 
@@ -951,6 +1173,7 @@
     await loadMonthly();
     await loadReview();
     await loadVatCheck();
+    await loadVatPosition();
   })();
 </script>
 
