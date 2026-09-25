@@ -497,6 +497,9 @@
   <button onclick="openReport('profit-loss')">📄 Profit & Loss (PDF)</button>
   <button onclick="openReport('transactions-csv')">📊 Export Transactions (CSV)</button>
   <span class="preset-divider"></span>
+  <button onclick="openVatReport('vat')">💷 VAT Estimate</button>
+  <button onclick="openVatReport('vat-breach')">📈 VAT Breach Analysis</button>
+  <span class="preset-divider"></span>
   <button onclick="syncNow()" id="syncBtn">🔄 Sync Now</button>
 </div>
 
@@ -512,6 +515,14 @@
     <div class="vat-note" id="vatNote"></div>
     <div class="vat-trajectory" id="vatMonthTrajectory"></div>
     <div class="vat-gtu-box" id="vatGtuComparison" style="display:none;"></div>
+  </div>
+
+  <div class="vat-card" id="vatPositionCard" style="display:none;">
+    <div class="vat-top">
+      <span class="vat-label">VAT to set aside — estimated amount owed to date</span>
+      <span class="vat-figure" id="vatPositionHeadline"></span>
+    </div>
+    <div class="vat-note" id="vatPositionBody"></div>
   </div>
 
   <div class="cards">
@@ -988,6 +999,39 @@
     window.open(`/report/${kind}?from=${from}&to=${to}&key=${KEY}`, '_blank');
   }
 
+  function openVatReport(kind) {
+    window.open(`/report/${kind}?key=${KEY}`, '_blank');
+  }
+
+  async function loadVatPosition() {
+    let data;
+    try {
+      data = await api('/api/vat-position');
+    } catch (e) { return; }
+    const card = document.getElementById('vatPositionCard');
+    const headline = document.getElementById('vatPositionHeadline');
+    const body = document.getElementById('vatPositionBody');
+    const bank = data.bankBasis;
+    const gtu = data.goteamupBasis;
+    const liveOwed = [];
+    if (bank && bank.liabilityStarted) liveOwed.push(bank.setAside_8_5);
+    if (gtu && gtu.liabilityStarted) liveOwed.push(gtu.setAside_8_5);
+    const headlineFigure = liveOwed.length ? Math.max(...liveOwed) : 0;
+    headline.textContent = fmt(headlineFigure) + ' (8.5%)';
+    function basisLine(label, b) {
+      if (!b) return `<div style="margin-top:10px;"><strong>${label}:</strong> no breach detected in the data held.</div>`;
+      if (!b.liabilityStarted) {
+        return `<div style="margin-top:10px;"><strong>${label}:</strong> crossed £90k at end of ${b.breachMonth} → registration effective <strong>${formatDateShort(b.registrationDate)}</strong>. Liability hasn't started yet — <strong>£0 to set aside so far</strong> under this basis.</div>`;
+      }
+      return `<div style="margin-top:10px;"><strong>${label}:</strong> registered effective <strong>${formatDateShort(b.registrationDate)}</strong>. On ${fmt(b.incomeSinceRegistration)} of income since then, you should have set aside <strong style="color:var(--expense)">${fmt(b.setAside_8_5)}</strong> at 8.5% (or <strong style="color:var(--expense)">${fmt(b.setAside_16_5)}</strong> if the 16.5% limited-cost rate applies).</div>`;
+    }
+    card.style.display = 'block';
+    body.innerHTML =
+      basisLine('Bank basis (matches QuickBooks)', bank) +
+      basisLine('GoTeamUp basis (charges — cross-check)', gtu) +
+      `<span class="vat-note-caveat">Which basis applies is your accountant's call. The 8.5% vs 16.5% rate depends on the limited-cost-trader test. These are estimates to guide how much to hold back — not a filed return.</span>`;
+  }
+
   function toISODate(d) {
     // Build the date string from local year/month/day directly — going via toISOString()
     // converts through UTC first, which silently shifts the date back a day for anyone in a
@@ -1128,6 +1172,7 @@
     await loadMonthly();
     await loadReview();
     await loadVatCheck();
+    await loadVatPosition();
   })();
 </script>
 
