@@ -406,6 +406,13 @@ app.get('/report/profit-loss', async (req, res) => {
   const { from, to, key } = req.query;
   if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
 
+  // Earliest transaction date held — used to warn when a requested period predates the data.
+  let DATA_START_ISO = '2025-07-01';
+  try {
+    const dr = await pool.query(`SELECT MIN(txn_date) as earliest FROM transactions`);
+    if (dr.rows[0] && dr.rows[0].earliest) DATA_START_ISO = new Date(dr.rows[0].earliest).toISOString().slice(0,10);
+  } catch (e) {}
+
   const { rows } = await pool.query(
     `SELECT c.name, c.type, SUM(t.amount) as total, COUNT(*) as txn_count
      FROM transactions t
@@ -445,6 +452,20 @@ app.get('/report/profit-loss', async (req, res) => {
   <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
   <h1>SPS Fitness — Profit & Loss</h1>
   <div class="sub">Period: ${from} to ${to} · Generated ${new Date().toLocaleDateString('en-GB')}</div>
+  <div class="period-picker no-print" style="margin:16px 0; display:flex; gap:8px; flex-wrap:wrap;">
+    <button onclick="goPeriod('company-this')">This Company Year (May–Apr)</button>
+    <button onclick="goPeriod('company-last')">Last Company Year</button>
+    <button onclick="goPeriod('tax-this')">This Tax Year (Apr–Apr)</button>
+    <button onclick="goPeriod('q')">This Quarter</button>
+  </div>
+  ${(() => {
+    // Data-coverage caveat: the app's transaction data starts mid-2025, so any period reaching
+    // before that is incomplete. DATA_START is the earliest txn date; flag if the requested
+    // period begins before it.
+    return from < DATA_START_ISO
+      ? `<div class="coverage-warn no-print" style="background:#fff4e5;border:1px solid #ffd699;border-radius:8px;padding:10px 14px;font-size:12px;color:#92600a;margin-bottom:12px;line-height:1.5;">⚠️ This period starts before the app's transaction data begins (${DATA_START_ISO}). Figures before that date are missing — this is a partial view, not a complete year. Your filed accounts remain the record for earlier periods.</div>`
+      : '';
+  })()}
 
   <h2>Income</h2>
   <table><thead><tr><th>Category</th><th style="text-align:right">Transactions</th><th style="text-align:right">Amount</th></tr></thead>
@@ -455,6 +476,35 @@ app.get('/report/profit-loss', async (req, res) => {
   <tbody>${rowsHtml(expenses, true)}<tr class="total-row"><td>Total Expenses</td><td></td><td style="text-align:right">${fmt(totalExpense)}</td></tr></tbody></table>
 
   <table><tbody><tr class="net-row"><td>Net Profit</td><td></td><td style="text-align:right; color:${net >= 0 ? '#0f9d58' : '#d93025'}">${fmt(net)}</td></tr></tbody></table>
+  <style>
+    .period-picker button { background:#fff; border:1px solid #e5e7eb; border-radius:100px; padding:6px 14px; font-size:12px; font-weight:600; cursor:pointer; }
+    .period-picker button:hover { border-color:#1a4dff; color:#1a4dff; }
+    @media print { .no-print { display:none !important; } }
+  </style>
+  <script>
+    const KEY = new URLSearchParams(location.search).get('key');
+    function iso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+    function goPeriod(kind){
+      const now = new Date();
+      let f, t;
+      if (kind === 'company-this' || kind === 'company-last') {
+        // Company year runs 1 May to 30 April. Determine the current company year's start.
+        const y = now.getFullYear();
+        const startThis = (now.getMonth() >= 4) ? new Date(y,4,1) : new Date(y-1,4,1); // month 4 = May
+        if (kind === 'company-this') { f = startThis; t = new Date(startThis.getFullYear()+1,3,30); }
+        else { f = new Date(startThis.getFullYear()-1,4,1); t = new Date(startThis.getFullYear(),3,30); }
+      } else if (kind === 'tax-this') {
+        const y = now.getFullYear();
+        const taxStart = (now.getMonth() > 3 || (now.getMonth()===3 && now.getDate()>=6)) ? new Date(y,3,6) : new Date(y-1,3,6);
+        f = taxStart; t = now;
+      } else if (kind === 'q') {
+        const qStartMonth = Math.floor(now.getMonth()/3)*3;
+        f = new Date(now.getFullYear(), qStartMonth, 1); t = now;
+      }
+      const tEnd = t > now ? now : t; // never run past today
+      location.search = '?key='+KEY+'&from='+iso(f)+'&to='+iso(tEnd);
+    }
+  </script>
 </body></html>`);
 });
 
