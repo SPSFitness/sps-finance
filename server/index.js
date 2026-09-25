@@ -463,6 +463,142 @@ app.get('/report/profit-loss', async (req, res) => {
 // flat-rate VAT at BOTH 8.5% and 16.5% side by side, plus a running total, so whichever rate the
 // accountant confirms the figure is ready. Set ?from= to the effective registration date for the
 // true "set aside" figure. Optional ?rate= (e.g. 0.075) overrides the headline 8.5% rate.
+app.get('/report/vat-summary', async (req, res) => {
+  const { key, setAside } = req.query;
+  if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
+
+  const today = new Date().toISOString().slice(0, 10);
+  const fundsAside = setAside ? Number(setAside) : 2000;
+
+  // --- Work out breach months + effective dates on BOTH bases ---
+  const { rows: bankMonths } = await pool.query(
+    `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month, SUM(t.amount) as total
+     FROM transactions t JOIN categories c ON c.id = t.category_id
+     WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
+     GROUP BY month ORDER BY month ASC`
+  );
+  let gtuMonths = [];
+  try {
+    const r = await pool.query(
+      `SELECT to_char(date_trunc('month', charged_at), 'YYYY-MM') as month, SUM(amount) as total
+       FROM gtu_payments GROUP BY month ORDER BY month ASC`
+    );
+    gtuMonths = r.rows;
+  } catch (e) { gtuMonths = []; }
+
+  const bankMap = Object.fromEntries(bankMonths.map(r => [r.month, Number(r.total)]));
+  const gtuMap = Object.fromEntries(gtuMonths.map(r => [r.month, Number(r.total)]));
+  const allMonths = [...new Set([...Object.keys(bankMap), ...Object.keys(gtuMap)])].sort();
+
+  function rolling12(map, endMonth) {
+    const [y, m] = endMonth.split('-').map(Number);
+    let sum = 0;
+    for (let i = 0; i < 12; i++) {
+      let mm = m - i, yy = y;
+      while (mm <= 0) { mm += 12; yy -= 1; }
+      sum += (map[`${yy}-${String(mm).padStart(2, '0')}`] || 0);
+    }
+    return sum;
+  }
+  function effDate(breachMonth) {
+    if (!breachMonth) return null;
+    const [y, m] = breachMonth.split('-').map(Number);
+    let mm = m + 2, yy = y;
+    while (mm > 12) { mm -= 12; yy += 1; }
+    return `${yy}-${String(mm).padStart(2, '0')}-01`;
+  }
+  function incomeSince(map, startDate) {
+    if (!startDate || startDate > today) return 0;
+    const startMonth = startDate.slice(0, 7);
+    return allMonths.filter(mo => mo >= startMonth).reduce((s, mo) => s + (map[mo] || 0), 0);
+  }
+
+  let bankBreach = null, gtuBreach = null;
+  for (const mo of allMonths) {
+    if (!bankBreach && rolling12(bankMap, mo) > 90000) bankBreach = mo;
+    if (!gtuBreach && rolling12(gtuMap, mo) > 90000) gtuBreach = mo;
+  }
+  const bankEff = effDate(bankBreach);
+  const gtuEff = effDate(gtuBreach);
+
+  // For each basis, income liable = income from its own effective date, using its own data source
+  const bankLiable = incomeSince(bankMap, bankEff);
+  const gtuLiable = incomeSince(gtuMap, gtuEff);
+
+  const fmt = (n) => (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const dateFmt = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+
+  // Build the 4 scenario cells
+  function cell(liable, rate, eff) {
+    const started = eff && eff <= today;
+    const owed = started ? liable * rate : 0;
+    const shortfall = fundsAside - owed;
+    const covered = shortfall >= 0;
+    if (!started) {
+      return `<td style="text-align:right; color:#6b7280">£0.00<br><span style="font-size:11px">not started (${dateFmt(eff)})</span></td>`;
+    }
+    return `<td style="text-align:right"><strong>${fmt(owed)}</strong><br>
+      <span style="font-size:11px; color:${covered ? '#0f9d58' : '#d93025'}">${covered ? fmt(shortfall) + ' spare' : fmt(-shortfall) + ' short'}</span></td>`;
+  }
+
+  res.send(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>VAT Summary — SPS Fitness</title>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; max-width: 780px; margin: 40px auto; color: #0b0b0f; padding: 0 20px; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 16px 0; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; color: #6b7280; padding: 10px 8px; border-bottom: 2px solid #0b0b0f; }
+  td { padding: 12px 8px; border-bottom: 1px solid #f1f3f5; }
+  .aside-box { background: #f8f9ff; border: 1px solid #dce3ff; border-radius: 10px; padding: 16px 20px; margin: 16px 0; font-size: 15px; }
+  .notes { font-size: 12px; color: #6b7280; line-height: 1.6; margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px; }
+  .notes strong { color: #0b0b0f; }
+  .print-btn { position: fixed; top: 20px; right: 20px; background: #1a4dff; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+  @media print { .print-btn { display: none; } body { max-width: none; } }
+</style></head>
+<body>
+  <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
+  <h1>SPS Fitness — VAT Set-Aside Summary</h1>
+  <div class="sub">All scenarios as of ${dateFmt(today)} · Flat Rate Scheme · Bank-deposit / cash basis</div>
+
+  <div class="aside-box">You currently have <strong>${fmt(fundsAside)}</strong> set aside. The table shows VAT owed to date under each scenario, and whether that covers it.</div>
+
+  <table>
+    <thead><tr>
+      <th>Registration basis</th>
+      <th>Effective date</th>
+      <th>Income liable to date</th>
+      <th style="text-align:right">Owed @ 8.5%</th>
+      <th style="text-align:right">Owed @ 16.5%</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Bank basis</strong><br><span style="font-size:11px;color:#6b7280">matches QuickBooks</span></td>
+        <td>${dateFmt(bankEff)}</td>
+        <td style="text-align:right">${bankEff && bankEff <= today ? fmt(bankLiable) : '£0.00'}</td>
+        ${cell(bankLiable, 0.085, bankEff)}
+        ${cell(bankLiable, 0.165, bankEff)}
+      </tr>
+      <tr>
+        <td><strong>GoTeamUp basis</strong><br><span style="font-size:11px;color:#6b7280">charges / invoice date</span></td>
+        <td>${dateFmt(gtuEff)}</td>
+        <td style="text-align:right">${gtuEff && gtuEff <= today ? fmt(gtuLiable) : '£0.00'}</td>
+        ${cell(gtuLiable, 0.085, gtuEff)}
+        ${cell(gtuLiable, 0.165, gtuEff)}
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="notes">
+    <strong>How to read this:</strong> each row is one possible registration basis; each rate column is one possible flat rate.
+    The small green/red figure shows whether your ${fmt(fundsAside)} covers that scenario ("spare") or falls short ("short").<br><br>
+    <strong>Two things the accountant confirms:</strong> (1) which basis applies — bank/cash (matches QuickBooks, later date) or invoice/charges (GoTeamUp, earlier date); (2) which rate applies — your 8.5% sector rate, or 16.5% if you're a limited-cost trader (low goods spend). The worst case is GoTeamUp basis at 16.5%.<br><br>
+    <strong>Change your set-aside figure</strong> by adding <code>&setAside=3000</code> to the URL.<br><br>
+    <strong>This is an estimate to guide funds set aside, not a filed return.</strong> Figures are only as accurate as the categorised data behind them.
+  </div>
+</body></html>`);
+});
+
 app.get('/report/vat', async (req, res) => {
   const { from, to, key, rate } = req.query;
   if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
