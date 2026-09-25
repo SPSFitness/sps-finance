@@ -467,9 +467,46 @@ app.get('/report/vat', async (req, res) => {
   const { from, to, key, rate } = req.query;
   if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
 
-  const fromDate = from || '2026-04-06';
   const toDate = to || new Date().toISOString().slice(0, 10);
   const headlineRate = rate ? Number(rate) : 0.085;
+
+  // Work out the effective registration date automatically (bank basis) so the report only
+  // counts VAT from when liability actually starts — NOT from 6 April. It walks each month-end,
+  // finds where the rolling 12-month total first crossed £90k, then applies HMRC's rule:
+  // register by the 1st of the SECOND month after the breach month. An explicit ?from= overrides
+  // this (use it once the accountant confirms the official date).
+  let breachEffectiveDate = null;
+  {
+    const { rows: bankMonths } = await pool.query(
+      `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month, SUM(t.amount) as total
+       FROM transactions t JOIN categories c ON c.id = t.category_id
+       WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
+       GROUP BY month ORDER BY month ASC`
+    );
+    const bankMap = Object.fromEntries(bankMonths.map(r => [r.month, Number(r.total)]));
+    const months = Object.keys(bankMap).sort();
+    function rolling12(endMonth) {
+      const [y, m] = endMonth.split('-').map(Number);
+      let sum = 0;
+      for (let i = 0; i < 12; i++) {
+        let mm = m - i, yy = y;
+        while (mm <= 0) { mm += 12; yy -= 1; }
+        sum += (bankMap[`${yy}-${String(mm).padStart(2, '0')}`] || 0);
+      }
+      return sum;
+    }
+    let breachMonth = null;
+    for (const mo of months) { if (rolling12(mo) > 90000) { breachMonth = mo; break; } }
+    if (breachMonth) {
+      const [y, m] = breachMonth.split('-').map(Number);
+      let mm = m + 2, yy = y;
+      while (mm > 12) { mm -= 12; yy += 1; }
+      breachEffectiveDate = `${yy}-${String(mm).padStart(2, '0')}-01`;
+    }
+  }
+
+  // Priority: explicit ?from= (accountant's confirmed date) > auto breach date > fallback to tax-year start
+  const fromDate = from || breachEffectiveDate || '2026-04-06';
 
   const { rows } = await pool.query(
     `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month,
@@ -527,7 +564,7 @@ app.get('/report/vat', async (req, res) => {
 <body>
   <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
   <h1>SPS Fitness — VAT Estimate (Flat Rate Scheme)</h1>
-  <div class="sub">Period: ${fromDate} to ${toDate} · Generated ${new Date().toLocaleDateString('en-GB')} · Bank-deposit basis (money received)</div>
+  <div class="sub">Period: ${fromDate} to ${toDate} · Generated ${new Date().toLocaleDateString('en-GB')} · Bank-deposit basis${from ? '' : (breachEffectiveDate ? ' · start date auto-set to estimated registration date' : '')}</div>
 
   <div class="headline">
     <div class="lbl">Estimated VAT to set aside at ${pct}% (flat rate, bank basis)</div>
