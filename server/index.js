@@ -17,6 +17,50 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// ---------------------------------------------------------------------------
+// VAT — Flat Rate Scheme configuration
+// ---------------------------------------------------------------------------
+// Live registration: 8.5% flat rate, bank basis, effective 1 November 2026,
+// no first-year 1% discount applied (accountant confirmed 8.5%).
+//
+// VAT_QUARTER_ANCHOR is the start of the FIRST VAT period. Until the VAT
+// certificate confirms the stagger group, quarters default to 3-month blocks
+// from registration (Nov–Jan, Feb–Apr, May–Jul, Aug–Oct). When the certificate
+// arrives, change VAT_QUARTER_ANCHOR to the real first-period start date and,
+// if HMRC gave a short/long opening period, that's the only line to touch.
+const VAT_REGISTERED_FROM = process.env.VAT_REGISTERED_FROM || '2026-11-01';
+const VAT_FLAT_RATE = Number(process.env.VAT_FLAT_RATE || 0.085);
+const VAT_QUARTER_ANCHOR = process.env.VAT_QUARTER_ANCHOR || '2026-11-01';
+const VAT_QUARTER_MONTHS = Number(process.env.VAT_QUARTER_MONTHS || 3);
+
+// Build a date string from local parts (avoids the UTC day-shift bug).
+function isoLocal(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Generate consecutive VAT quarters from the anchor up to (and including) the
+// quarter that contains today. Each quarter is { from, to } inclusive ISO dates.
+function buildVatQuarters(anchorISO, today) {
+  const quarters = [];
+  const now = today || new Date();
+  let start = new Date(anchorISO + 'T00:00:00');
+  // guard against a misconfigured anchor producing an infinite loop
+  let safety = 0;
+  while (start <= now && safety < 400) {
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + VAT_QUARTER_MONTHS);
+    end.setDate(end.getDate() - 1); // inclusive last day of the period
+    quarters.push({ from: isoLocal(start), to: isoLocal(end) });
+    start = new Date(end);
+    start.setDate(start.getDate() + 1);
+    safety++;
+  }
+  return quarters;
+}
+
 // How many days each sync re-pulls. Widened from 7 to 45 so a missed/failed run still gets
 // caught on the next successful sync rather than the transaction being permanently skipped
 // once it ages out of a narrow window.
@@ -76,8 +120,7 @@ app.post('/api/sync-now', requireAuth, async (req, res) => {
 // Deep catch-up — re-pulls a much wider window (default 90 days, overridable via ?days=N up to
 // 400) to recover transactions that were permanently missed during past sync failures. Safe to
 // run any time: existing transactions are skipped, only genuinely-missing ones get inserted.
-// Uses app.all so it can be triggered by simply visiting the URL in a browser (GET) as well as POST.
-app.all('/api/catch-up', requireAuth, async (req, res) => {
+app.post('/api/catch-up', requireAuth, async (req, res) => {
   try {
     const days = Math.min(Number(req.query.days) || 90, 400);
     const { rows: accounts } = await pool.query(`SELECT * FROM accounts`);
@@ -236,6 +279,121 @@ app.get('/api/vat-check', requireAuth, async (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// VAT Flat Rate Scheme — what's actually owed, per quarter and running total.
+// ---------------------------------------------------------------------------
+// Bank basis: gross takings = trading income landing in the bank. On the flat
+// rate scheme you pay VAT_FLAT_RATE of your VAT-inclusive takings; you do NOT
+// deduct input VAT on normal purchases. The only deductions are the manual
+// reclaims in vat_reclaims (capital assets >= £2k, and the pre-registration
+// claim), each netted against the quarter its reclaim_date falls in.
+app.get('/api/vat-flat-rate', requireAuth, async (req, res) => {
+  try {
+    const today = new Date();
+    const quarters = buildVatQuarters(VAT_QUARTER_ANCHOR, today);
+
+    // Pull all reclaims once, assign them to quarters in JS.
+    let reclaims = [];
+    try {
+      const r = await pool.query(`SELECT * FROM vat_reclaims ORDER BY reclaim_date ASC`);
+      reclaims = r.rows;
+    } catch (e) {
+      reclaims = []; // table may not exist yet
+    }
+
+    const quarterData = [];
+    for (const q of quarters) {
+      const { rows } = await pool.query(
+        `SELECT COALESCE(SUM(t.amount), 0) as total
+         FROM transactions t
+         JOIN categories c ON c.id = t.category_id
+         WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
+           AND t.txn_date BETWEEN $1 AND $2`,
+        [q.from, q.to]
+      );
+      const grossTakings = Number(rows[0].total);
+      const vatDue = grossTakings * VAT_FLAT_RATE;
+
+      const qReclaims = reclaims.filter(rc => {
+        const d = rc.reclaim_date instanceof Date ? isoLocal(rc.reclaim_date) : String(rc.reclaim_date).slice(0, 10);
+        return d >= q.from && d <= q.to;
+      });
+      const reclaimTotal = qReclaims.reduce((s, rc) => s + Number(rc.vat_amount), 0);
+
+      quarterData.push({
+        from: q.from,
+        to: q.to,
+        grossTakings,
+        vatDue,
+        reclaimTotal,
+        netDue: vatDue - reclaimTotal,
+        reclaimCount: qReclaims.length
+      });
+    }
+
+    const totalGross = quarterData.reduce((s, q) => s + q.grossTakings, 0);
+    const totalVatDue = quarterData.reduce((s, q) => s + q.vatDue, 0);
+    const totalReclaims = reclaims.reduce((s, rc) => s + Number(rc.vat_amount), 0);
+    const runningNetOwed = totalVatDue - totalReclaims;
+
+    res.json({
+      registeredFrom: VAT_REGISTERED_FROM,
+      flatRate: VAT_FLAT_RATE,
+      quarterAnchor: VAT_QUARTER_ANCHOR,
+      quarterMonths: VAT_QUARTER_MONTHS,
+      quartersStartedYet: quarters.length > 0,
+      quarters: quarterData,
+      totals: {
+        totalGross,
+        totalVatDue,
+        totalReclaims,
+        runningNetOwed
+      },
+      reclaims
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List reclaims
+app.get('/api/vat-reclaims', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT * FROM vat_reclaims ORDER BY reclaim_date DESC`);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add a reclaim — every figure is user-entered, on the accountant's advice.
+app.post('/api/vat-reclaims', requireAuth, async (req, res) => {
+  const { reclaim_date, description, net_amount, vat_amount, notes } = req.body;
+  if (!reclaim_date || !description || vat_amount === undefined || vat_amount === null || vat_amount === '') {
+    return res.status(400).json({ error: 'reclaim_date, description and vat_amount are required' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO vat_reclaims (reclaim_date, description, net_amount, vat_amount, notes)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [reclaim_date, description, net_amount || null, vat_amount, notes || null]
+    );
+    res.json({ ok: true, id: rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a reclaim
+app.delete('/api/vat-reclaims/:id', requireAuth, async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM vat_reclaims WHERE id = $1`, [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/monthly-summary', requireAuth, async (req, res) => {
   const { from, to } = req.query;
   const { rows } = await pool.query(
@@ -326,92 +484,9 @@ app.post('/api/transactions/:id/category', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/vat-position', requireAuth, async (req, res) => {
-  const THRESHOLD = 90000;
-  const today = new Date().toISOString().slice(0, 10);
-
-  // Monthly trading income, bank basis
-  const { rows: bankMonths } = await pool.query(
-    `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month, SUM(t.amount) as total
-     FROM transactions t JOIN categories c ON c.id = t.category_id
-     WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
-     GROUP BY month ORDER BY month ASC`
-  );
-  let gtuMonths = [];
-  try {
-    const r = await pool.query(
-      `SELECT to_char(date_trunc('month', charged_at), 'YYYY-MM') as month, SUM(amount) as total
-       FROM gtu_payments GROUP BY month ORDER BY month ASC`
-    );
-    gtuMonths = r.rows;
-  } catch (e) { gtuMonths = []; }
-
-  const bankMap = Object.fromEntries(bankMonths.map(r => [r.month, Number(r.total)]));
-  const gtuMap = Object.fromEntries(gtuMonths.map(r => [r.month, Number(r.total)]));
-  const allMonths = [...new Set([...Object.keys(bankMap), ...Object.keys(gtuMap)])].sort();
-
-  function rolling12(map, endMonth) {
-    const [y, m] = endMonth.split('-').map(Number);
-    let sum = 0;
-    for (let i = 0; i < 12; i++) {
-      let mm = m - i, yy = y;
-      while (mm <= 0) { mm += 12; yy -= 1; }
-      sum += (map[`${yy}-${String(mm).padStart(2, '0')}`] || 0);
-    }
-    return sum;
-  }
-  function effectiveDate(breachMonth) {
-    const [y, m] = breachMonth.split('-').map(Number);
-    let mm = m + 2, yy = y;
-    while (mm > 12) { mm -= 12; yy += 1; }
-    return `${yy}-${String(mm).padStart(2, '0')}-01`;
-  }
-  // Sum a month-map's income from a start month (YYYY-MM-01) to now
-  function incomeSince(map, startDate) {
-    const startMonth = startDate.slice(0, 7);
-    return allMonths.filter(mo => mo >= startMonth).reduce((s, mo) => s + (map[mo] || 0), 0);
-  }
-
-  // Find breach month for each basis
-  let bankBreach = null, gtuBreach = null;
-  for (const mo of allMonths) {
-    if (!bankBreach && rolling12(bankMap, mo) > THRESHOLD) bankBreach = mo;
-    if (!gtuBreach && rolling12(gtuMap, mo) > THRESHOLD) gtuBreach = mo;
-  }
-
-  function scenario(breachMonth, incomeMap) {
-    if (!breachMonth) return null;
-    const regDate = effectiveDate(breachMonth);
-    const liable = regDate <= today; // has the registration date passed?
-    const incomeSinceReg = liable ? incomeSince(incomeMap, regDate) : 0;
-    return {
-      breachMonth,
-      registrationDate: regDate,
-      liabilityStarted: liable,
-      incomeSinceRegistration: incomeSinceReg,
-      setAside_8_5: incomeSinceReg * 0.085,
-      setAside_16_5: incomeSinceReg * 0.165
-    };
-  }
-
-  res.json({
-    threshold: THRESHOLD,
-    asOf: today,
-    bankBasis: scenario(bankBreach, bankMap),
-    goteamupBasis: scenario(gtuBreach, gtuMap)
-  });
-});
-
 app.get('/report/profit-loss', async (req, res) => {
   const { from, to, key } = req.query;
   if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
-
-  // Earliest transaction date held — used to warn when a requested period predates the data.
-  let DATA_START_ISO = '2025-07-01';
-  try {
-    const dr = await pool.query(`SELECT MIN(txn_date) as earliest FROM transactions`);
-    if (dr.rows[0] && dr.rows[0].earliest) DATA_START_ISO = new Date(dr.rows[0].earliest).toISOString().slice(0,10);
-  } catch (e) {}
 
   const { rows } = await pool.query(
     `SELECT c.name, c.type, SUM(t.amount) as total, COUNT(*) as txn_count
@@ -452,20 +527,6 @@ app.get('/report/profit-loss', async (req, res) => {
   <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
   <h1>SPS Fitness — Profit & Loss</h1>
   <div class="sub">Period: ${from} to ${to} · Generated ${new Date().toLocaleDateString('en-GB')}</div>
-  <div class="period-picker no-print" style="margin:16px 0; display:flex; gap:8px; flex-wrap:wrap;">
-    <button onclick="goPeriod('company-this')">This Company Year (May–Apr)</button>
-    <button onclick="goPeriod('company-last')">Last Company Year</button>
-    <button onclick="goPeriod('tax-this')">This Tax Year (Apr–Apr)</button>
-    <button onclick="goPeriod('q')">This Quarter</button>
-  </div>
-  ${(() => {
-    // Data-coverage caveat: the app's transaction data starts mid-2025, so any period reaching
-    // before that is incomplete. DATA_START is the earliest txn date; flag if the requested
-    // period begins before it.
-    return from < DATA_START_ISO
-      ? `<div class="coverage-warn no-print" style="background:#fff4e5;border:1px solid #ffd699;border-radius:8px;padding:10px 14px;font-size:12px;color:#92600a;margin-bottom:12px;line-height:1.5;">⚠️ This period starts before the app's transaction data begins (${DATA_START_ISO}). Figures before that date are missing — this is a partial view, not a complete year. Your filed accounts remain the record for earlier periods.</div>`
-      : '';
-  })()}
 
   <h2>Income</h2>
   <table><thead><tr><th>Category</th><th style="text-align:right">Transactions</th><th style="text-align:right">Amount</th></tr></thead>
@@ -476,449 +537,119 @@ app.get('/report/profit-loss', async (req, res) => {
   <tbody>${rowsHtml(expenses, true)}<tr class="total-row"><td>Total Expenses</td><td></td><td style="text-align:right">${fmt(totalExpense)}</td></tr></tbody></table>
 
   <table><tbody><tr class="net-row"><td>Net Profit</td><td></td><td style="text-align:right; color:${net >= 0 ? '#0f9d58' : '#d93025'}">${fmt(net)}</td></tr></tbody></table>
-  <style>
-    .period-picker button { background:#fff; border:1px solid #e5e7eb; border-radius:100px; padding:6px 14px; font-size:12px; font-weight:600; cursor:pointer; }
-    .period-picker button:hover { border-color:#1a4dff; color:#1a4dff; }
-    @media print { .no-print { display:none !important; } }
-  </style>
-  <script>
-    const KEY = new URLSearchParams(location.search).get('key');
-    function iso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
-    function goPeriod(kind){
-      const now = new Date();
-      let f, t;
-      if (kind === 'company-this' || kind === 'company-last') {
-        // Company year runs 1 May to 30 April. Determine the current company year's start.
-        const y = now.getFullYear();
-        const startThis = (now.getMonth() >= 4) ? new Date(y,4,1) : new Date(y-1,4,1); // month 4 = May
-        if (kind === 'company-this') { f = startThis; t = new Date(startThis.getFullYear()+1,3,30); }
-        else { f = new Date(startThis.getFullYear()-1,4,1); t = new Date(startThis.getFullYear(),3,30); }
-      } else if (kind === 'tax-this') {
-        const y = now.getFullYear();
-        const taxStart = (now.getMonth() > 3 || (now.getMonth()===3 && now.getDate()>=6)) ? new Date(y,3,6) : new Date(y-1,3,6);
-        f = taxStart; t = now;
-      } else if (kind === 'q') {
-        const qStartMonth = Math.floor(now.getMonth()/3)*3;
-        f = new Date(now.getFullYear(), qStartMonth, 1); t = now;
-      }
-      const tEnd = t > now ? now : t; // never run past today
-      location.search = '?key='+KEY+'&from='+iso(f)+'&to='+iso(tEnd);
-    }
-  </script>
 </body></html>`);
 });
 
-// VAT estimate report (Flat Rate Scheme). Bank-deposit basis — money actually received, matching
-// the previous QuickBooks / cash-accounting setup. Shows gross trading income per month with the
-// flat-rate VAT at BOTH 8.5% and 16.5% side by side, plus a running total, so whichever rate the
-// accountant confirms the figure is ready. Set ?from= to the effective registration date for the
-// true "set aside" figure. Optional ?rate= (e.g. 0.075) overrides the headline 8.5% rate.
-app.get('/report/vat-summary', async (req, res) => {
-  const { key, setAside } = req.query;
-  if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
-
-  const today = new Date().toISOString().slice(0, 10);
-  const fundsAside = setAside ? Number(setAside) : 2000;
-
-  // --- Work out breach months + effective dates on BOTH bases ---
-  const { rows: bankMonths } = await pool.query(
-    `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month, SUM(t.amount) as total
-     FROM transactions t JOIN categories c ON c.id = t.category_id
-     WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
-     GROUP BY month ORDER BY month ASC`
-  );
-  let gtuMonths = [];
-  try {
-    const r = await pool.query(
-      `SELECT to_char(date_trunc('month', charged_at), 'YYYY-MM') as month, SUM(amount) as total
-       FROM gtu_payments GROUP BY month ORDER BY month ASC`
-    );
-    gtuMonths = r.rows;
-  } catch (e) { gtuMonths = []; }
-
-  const bankMap = Object.fromEntries(bankMonths.map(r => [r.month, Number(r.total)]));
-  const gtuMap = Object.fromEntries(gtuMonths.map(r => [r.month, Number(r.total)]));
-  const allMonths = [...new Set([...Object.keys(bankMap), ...Object.keys(gtuMap)])].sort();
-
-  function rolling12(map, endMonth) {
-    const [y, m] = endMonth.split('-').map(Number);
-    let sum = 0;
-    for (let i = 0; i < 12; i++) {
-      let mm = m - i, yy = y;
-      while (mm <= 0) { mm += 12; yy -= 1; }
-      sum += (map[`${yy}-${String(mm).padStart(2, '0')}`] || 0);
-    }
-    return sum;
-  }
-  function effDate(breachMonth) {
-    if (!breachMonth) return null;
-    const [y, m] = breachMonth.split('-').map(Number);
-    let mm = m + 2, yy = y;
-    while (mm > 12) { mm -= 12; yy += 1; }
-    return `${yy}-${String(mm).padStart(2, '0')}-01`;
-  }
-  function incomeSince(map, startDate) {
-    if (!startDate || startDate > today) return 0;
-    const startMonth = startDate.slice(0, 7);
-    return allMonths.filter(mo => mo >= startMonth).reduce((s, mo) => s + (map[mo] || 0), 0);
-  }
-
-  let bankBreach = null, gtuBreach = null;
-  for (const mo of allMonths) {
-    if (!bankBreach && rolling12(bankMap, mo) > 90000) bankBreach = mo;
-    if (!gtuBreach && rolling12(gtuMap, mo) > 90000) gtuBreach = mo;
-  }
-  const bankEff = effDate(bankBreach);
-  const gtuEff = effDate(gtuBreach);
-
-  // For each basis, income liable = income from its own effective date, using its own data source
-  const bankLiable = incomeSince(bankMap, bankEff);
-  const gtuLiable = incomeSince(gtuMap, gtuEff);
-
-  const fmt = (n) => (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const dateFmt = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
-
-  // Build the 4 scenario cells
-  function cell(liable, rate, eff) {
-    const started = eff && eff <= today;
-    const owed = started ? liable * rate : 0;
-    const shortfall = fundsAside - owed;
-    const covered = shortfall >= 0;
-    if (!started) {
-      return `<td style="text-align:right; color:#6b7280">£0.00<br><span style="font-size:11px">not started (${dateFmt(eff)})</span></td>`;
-    }
-    return `<td style="text-align:right"><strong>${fmt(owed)}</strong><br>
-      <span style="font-size:11px; color:${covered ? '#0f9d58' : '#d93025'}">${covered ? fmt(shortfall) + ' spare' : fmt(-shortfall) + ' short'}</span></td>`;
-  }
-
-  res.send(`<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>VAT Summary — SPS Fitness</title>
-<style>
-  body { font-family: -apple-system, Arial, sans-serif; max-width: 780px; margin: 40px auto; color: #0b0b0f; padding: 0 20px; }
-  h1 { font-size: 22px; margin-bottom: 4px; }
-  .sub { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 16px 0; }
-  th { text-align: left; font-size: 11px; text-transform: uppercase; color: #6b7280; padding: 10px 8px; border-bottom: 2px solid #0b0b0f; }
-  td { padding: 12px 8px; border-bottom: 1px solid #f1f3f5; }
-  .aside-box { background: #f8f9ff; border: 1px solid #dce3ff; border-radius: 10px; padding: 16px 20px; margin: 16px 0; font-size: 15px; }
-  .notes { font-size: 12px; color: #6b7280; line-height: 1.6; margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px; }
-  .notes strong { color: #0b0b0f; }
-  .print-btn { position: fixed; top: 20px; right: 20px; background: #1a4dff; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
-  @media print { .print-btn { display: none; } body { max-width: none; } }
-</style></head>
-<body>
-  <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
-  <h1>SPS Fitness — VAT Set-Aside Summary</h1>
-  <div class="sub">All scenarios as of ${dateFmt(today)} · Flat Rate Scheme · Bank-deposit / cash basis</div>
-
-  <div class="aside-box">You currently have <strong>${fmt(fundsAside)}</strong> set aside. The table shows VAT owed to date under each scenario, and whether that covers it.</div>
-
-  <table>
-    <thead><tr>
-      <th>Registration basis</th>
-      <th>Effective date</th>
-      <th>Income liable to date</th>
-      <th style="text-align:right">Owed @ 8.5%</th>
-      <th style="text-align:right">Owed @ 16.5%</th>
-    </tr></thead>
-    <tbody>
-      <tr>
-        <td><strong>Bank basis</strong><br><span style="font-size:11px;color:#6b7280">matches QuickBooks</span></td>
-        <td>${dateFmt(bankEff)}</td>
-        <td style="text-align:right">${bankEff && bankEff <= today ? fmt(bankLiable) : '£0.00'}</td>
-        ${cell(bankLiable, 0.085, bankEff)}
-        ${cell(bankLiable, 0.165, bankEff)}
-      </tr>
-      <tr>
-        <td><strong>GoTeamUp basis</strong><br><span style="font-size:11px;color:#6b7280">charges / invoice date</span></td>
-        <td>${dateFmt(gtuEff)}</td>
-        <td style="text-align:right">${gtuEff && gtuEff <= today ? fmt(gtuLiable) : '£0.00'}</td>
-        ${cell(gtuLiable, 0.085, gtuEff)}
-        ${cell(gtuLiable, 0.165, gtuEff)}
-      </tr>
-    </tbody>
-  </table>
-
-  <div class="notes">
-    <strong>How to read this:</strong> each row is one possible registration basis; each rate column is one possible flat rate.
-    The small green/red figure shows whether your ${fmt(fundsAside)} covers that scenario ("spare") or falls short ("short").<br><br>
-    <strong>Two things the accountant confirms:</strong> (1) which basis applies — bank/cash (matches QuickBooks, later date) or invoice/charges (GoTeamUp, earlier date); (2) which rate applies — your 8.5% sector rate, or 16.5% if you're a limited-cost trader (low goods spend). The worst case is GoTeamUp basis at 16.5%.<br><br>
-    <strong>Change your set-aside figure</strong> by adding <code>&setAside=3000</code> to the URL.<br><br>
-    <strong>This is an estimate to guide funds set aside, not a filed return.</strong> Figures are only as accurate as the categorised data behind them.
-  </div>
-</body></html>`);
-});
-
-app.get('/report/vat', async (req, res) => {
-  const { from, to, key, rate } = req.query;
-  if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
-
-  const toDate = to || new Date().toISOString().slice(0, 10);
-  const headlineRate = rate ? Number(rate) : 0.085;
-
-  // Work out the effective registration date automatically (bank basis) so the report only
-  // counts VAT from when liability actually starts — NOT from 6 April. It walks each month-end,
-  // finds where the rolling 12-month total first crossed £90k, then applies HMRC's rule:
-  // register by the 1st of the SECOND month after the breach month. An explicit ?from= overrides
-  // this (use it once the accountant confirms the official date).
-  let breachEffectiveDate = null;
-  {
-    const { rows: bankMonths } = await pool.query(
-      `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month, SUM(t.amount) as total
-       FROM transactions t JOIN categories c ON c.id = t.category_id
-       WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
-       GROUP BY month ORDER BY month ASC`
-    );
-    const bankMap = Object.fromEntries(bankMonths.map(r => [r.month, Number(r.total)]));
-    const months = Object.keys(bankMap).sort();
-    function rolling12(endMonth) {
-      const [y, m] = endMonth.split('-').map(Number);
-      let sum = 0;
-      for (let i = 0; i < 12; i++) {
-        let mm = m - i, yy = y;
-        while (mm <= 0) { mm += 12; yy -= 1; }
-        sum += (bankMap[`${yy}-${String(mm).padStart(2, '0')}`] || 0);
-      }
-      return sum;
-    }
-    let breachMonth = null;
-    for (const mo of months) { if (rolling12(mo) > 90000) { breachMonth = mo; break; } }
-    if (breachMonth) {
-      const [y, m] = breachMonth.split('-').map(Number);
-      let mm = m + 2, yy = y;
-      while (mm > 12) { mm -= 12; yy += 1; }
-      breachEffectiveDate = `${yy}-${String(mm).padStart(2, '0')}-01`;
-    }
-  }
-
-  // Priority: explicit ?from= (accountant's confirmed date) > auto breach date > fallback to tax-year start
-  const fromDate = from || breachEffectiveDate || '2026-04-06';
-
-  const { rows } = await pool.query(
-    `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month,
-            SUM(t.amount) as gross_income, COUNT(*) as txn_count
-     FROM transactions t
-     JOIN categories c ON c.id = t.category_id
-     WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
-       AND t.txn_date BETWEEN $1 AND $2
-     GROUP BY month
-     ORDER BY month ASC`,
-    [fromDate, toDate]
-  );
-
-  const fmt = (n) => (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const pct = (headlineRate * 100).toLocaleString('en-GB', { maximumFractionDigits: 2 });
-
-  let totalGross = 0;
-  let running = 0;
-  const bodyRows = rows.map(r => {
-    const gross = Number(r.gross_income);
-    totalGross += gross;
-    running += gross;
-    return `<tr>
-      <td>${r.month}</td>
-      <td style="text-align:right">${r.txn_count}</td>
-      <td style="text-align:right">${fmt(gross)}</td>
-      <td style="text-align:right">${fmt(gross * headlineRate)}</td>
-      <td style="text-align:right; color:#6b7280">${fmt(gross * 0.165)}</td>
-      <td style="text-align:right; font-weight:600">${fmt(running * headlineRate)}</td>
-    </tr>`;
-  }).join('');
-
-  const totalVatHeadline = totalGross * headlineRate;
-  const totalVat165 = totalGross * 0.165;
-
-  res.send(`<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>VAT Estimate — SPS Fitness</title>
-<style>
-  body { font-family: -apple-system, Arial, sans-serif; max-width: 900px; margin: 40px auto; color: #0b0b0f; padding: 0 20px; }
-  h1 { font-size: 22px; margin-bottom: 4px; }
-  .sub { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
-  th { text-align: left; font-size: 10px; text-transform: uppercase; color: #6b7280; padding: 8px 6px; border-bottom: 2px solid #0b0b0f; }
-  td { padding: 8px 6px; border-bottom: 1px solid #f1f3f5; }
-  .total-row td { font-weight: 700; border-top: 2px solid #0b0b0f; border-bottom: none; padding-top: 12px; font-size: 14px; }
-  .headline { background: #f8f9ff; border: 1px solid #dce3ff; border-radius: 10px; padding: 20px; margin: 20px 0; }
-  .headline .big { font-size: 28px; font-weight: 800; color: #1a4dff; }
-  .headline .lbl { font-size: 12px; text-transform: uppercase; color: #6b7280; font-weight: 600; letter-spacing: 0.04em; }
-  .notes { font-size: 12px; color: #6b7280; line-height: 1.6; margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px; }
-  .notes strong { color: #0b0b0f; }
-  .print-btn { position: fixed; top: 20px; right: 20px; background: #1a4dff; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
-  .warn { background: #fff4e5; border: 1px solid #ffd699; border-radius: 8px; padding: 12px 16px; font-size: 12px; color: #92600a; margin: 16px 0; line-height: 1.5; }
-  @media print { .print-btn { display: none; } body { max-width: none; } }
-</style></head>
-<body>
-  <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
-  <h1>SPS Fitness — VAT Estimate (Flat Rate Scheme)</h1>
-  <div class="sub">Period: ${fromDate} to ${toDate} · Generated ${new Date().toLocaleDateString('en-GB')} · Bank-deposit basis${from ? '' : (breachEffectiveDate ? ' · start date auto-set to estimated registration date' : '')}</div>
-
-  <div class="headline">
-    <div class="lbl">Estimated VAT to set aside at ${pct}% (flat rate, bank basis)</div>
-    <div class="big">${fmt(totalVatHeadline)}</div>
-    <div style="font-size:12px; color:#6b7280; margin-top:6px;">on gross trading income of ${fmt(totalGross)} · at 16.5% this would be ${fmt(totalVat165)}</div>
-  </div>
-
-  <div class="warn">
-    <strong>For the accountant to confirm:</strong> this uses ${pct}% on a bank-deposit (cash) basis, matching the previous QuickBooks setup.
-    If the Limited Cost Trader rule applies (low goods spend), the rate would be 16.5% — that column is shown alongside so the figure is ready either way.
-    VAT is only owed from the effective registration date onward — set the "from" date to that date (once HMRC confirms it) to get the true set-aside figure.
-  </div>
-
-  <table>
-    <thead><tr>
-      <th>Month</th>
-      <th style="text-align:right">Transactions</th>
-      <th style="text-align:right">Gross Income (banked)</th>
-      <th style="text-align:right">VAT @ ${pct}%</th>
-      <th style="text-align:right">VAT @ 16.5%</th>
-      <th style="text-align:right">Running VAT @ ${pct}%</th>
-    </tr></thead>
-    <tbody>
-      ${bodyRows}
-      <tr class="total-row">
-        <td>TOTAL</td><td></td>
-        <td style="text-align:right">${fmt(totalGross)}</td>
-        <td style="text-align:right">${fmt(totalVatHeadline)}</td>
-        <td style="text-align:right; color:#6b7280">${fmt(totalVat165)}</td>
-        <td style="text-align:right">${fmt(totalVatHeadline)}</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <div class="notes">
-    <strong>Basis of this report:</strong><br>
-    • <strong>Bank-deposit basis</strong> — counts income when it actually landed in the bank (net of Stripe/GoCardless fees), matching the previous QuickBooks / cash-accounting approach.<br>
-    • <strong>Trading income only</strong> — memberships, PT, retreats, clothing, etc. Excludes owner drawings, transfers between accounts, and loan repayments, none of which are VAT-able turnover.<br>
-    • <strong>Flat Rate Scheme</strong> — VAT owed is simply a flat percentage of gross turnover; you do not reclaim VAT on purchases (except single capital assets over £2,000).<br>
-    • <strong>This is an estimate to aid setting funds aside and to hand to your accountant</strong> — not a filed VAT return. Your accountant confirms the correct rate, registration date, and quarter cycle.
-  </div>
-</body></html>`);
-});
-
-
-// Walks every month-end and computes the rolling 12-month trading-income total ending that
-// month, on BOTH bank basis (transactions) and GoTeamUp basis (gtu_payments). Flags the first
-// month each basis exceeds £90,000, and applies HMRC's registration rule: you must register by
-// the 1st of the SECOND month after the month you breached, and that 1st is your effective date.
-app.get('/report/vat-breach', async (req, res) => {
+// Printable VAT Flat Rate return summary — per-quarter owed + running total, for the accountant.
+app.get('/report/vat-flat-rate', async (req, res) => {
   const { key } = req.query;
   if (key !== process.env.APP_SECRET) return res.status(401).send('Unauthorized');
 
-  const THRESHOLD = 90000;
-
-  // Bank basis: trading income per calendar month
-  const { rows: bankMonths } = await pool.query(
-    `SELECT to_char(date_trunc('month', t.txn_date), 'YYYY-MM') as month, SUM(t.amount) as total
-     FROM transactions t
-     JOIN categories c ON c.id = t.category_id
-     WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
-     GROUP BY month ORDER BY month ASC`
-  );
-
-  // GoTeamUp basis: charges per calendar month (may not exist — handle gracefully)
-  let gtuMonths = [];
   try {
-    const r = await pool.query(
-      `SELECT to_char(date_trunc('month', charged_at), 'YYYY-MM') as month, SUM(amount) as total
-       FROM gtu_payments GROUP BY month ORDER BY month ASC`
-    );
-    gtuMonths = r.rows;
-  } catch (e) { gtuMonths = []; }
+    const today = new Date();
+    const quarters = buildVatQuarters(VAT_QUARTER_ANCHOR, today);
 
-  // Build a unified sorted list of all months present in either dataset
-  const monthSet = new Set([...bankMonths.map(r => r.month), ...gtuMonths.map(r => r.month)]);
-  const months = [...monthSet].sort();
+    let reclaims = [];
+    try {
+      const r = await pool.query(`SELECT * FROM vat_reclaims ORDER BY reclaim_date ASC`);
+      reclaims = r.rows;
+    } catch (e) { reclaims = []; }
 
-  const bankMap = Object.fromEntries(bankMonths.map(r => [r.month, Number(r.total)]));
-  const gtuMap = Object.fromEntries(gtuMonths.map(r => [r.month, Number(r.total)]));
+    const fmt = (n) => (n < 0 ? '-£' : '£') + Math.abs(Number(n)).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtDate = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
-  // Rolling 12-month total ending at each month (inclusive of that month and 11 before)
-  function rolling12(map, endMonth) {
-    const [y, m] = endMonth.split('-').map(Number);
-    let sum = 0;
-    for (let i = 0; i < 12; i++) {
-      let mm = m - i, yy = y;
-      while (mm <= 0) { mm += 12; yy -= 1; }
-      const key = `${yy}-${String(mm).padStart(2, '0')}`;
-      sum += (map[key] || 0);
+    const qRows = [];
+    let totalGross = 0, totalVat = 0;
+    for (const q of quarters) {
+      const { rows } = await pool.query(
+        `SELECT COALESCE(SUM(t.amount), 0) as total
+         FROM transactions t JOIN categories c ON c.id = t.category_id
+         WHERE c.type = 'income' AND c.hmrc_group = 'trading_income'
+           AND t.txn_date BETWEEN $1 AND $2`,
+        [q.from, q.to]
+      );
+      const gross = Number(rows[0].total);
+      const vat = gross * VAT_FLAT_RATE;
+      const qReclaims = reclaims.filter(rc => {
+        const d = rc.reclaim_date instanceof Date ? isoLocal(rc.reclaim_date) : String(rc.reclaim_date).slice(0, 10);
+        return d >= q.from && d <= q.to;
+      });
+      const reclaimTotal = qReclaims.reduce((s, rc) => s + Number(rc.vat_amount), 0);
+      totalGross += gross; totalVat += vat;
+      qRows.push(`<tr>
+        <td>${fmtDate(q.from)} – ${fmtDate(q.to)}</td>
+        <td style="text-align:right">${fmt(gross)}</td>
+        <td style="text-align:right">${fmt(vat)}</td>
+        <td style="text-align:right">${reclaimTotal ? '-' + fmt(reclaimTotal) : '—'}</td>
+        <td style="text-align:right;font-weight:700">${fmt(vat - reclaimTotal)}</td>
+      </tr>`);
     }
-    return sum;
-  }
 
-  // Effective registration date from a breach month: 1st of the 2nd month after it
-  function effectiveDate(breachMonth) {
-    const [y, m] = breachMonth.split('-').map(Number);
-    let mm = m + 2, yy = y;
-    while (mm > 12) { mm -= 12; yy += 1; }
-    return `${yy}-${String(mm).padStart(2, '0')}-01`;
-  }
+    const totalReclaims = reclaims.reduce((s, rc) => s + Number(rc.vat_amount), 0);
+    const runningNet = totalVat - totalReclaims;
 
-  const fmt = (n) => (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const reclaimRows = reclaims.map(rc => `<tr>
+      <td>${fmtDate(rc.reclaim_date)}</td>
+      <td>${rc.description}</td>
+      <td style="text-align:right">${rc.net_amount ? fmt(rc.net_amount) : '—'}</td>
+      <td style="text-align:right">${fmt(rc.vat_amount)}</td>
+    </tr>`).join('');
 
-  let bankBreach = null, gtuBreach = null;
-  const rowsHtml = months.map(month => {
-    const bankRoll = rolling12(bankMap, month);
-    const gtuRoll = rolling12(gtuMap, month);
-    if (!bankBreach && bankRoll > THRESHOLD) bankBreach = month;
-    if (!gtuBreach && gtuRoll > THRESHOLD) gtuBreach = month;
-    const bankOver = bankRoll > THRESHOLD;
-    const gtuOver = gtuRoll > THRESHOLD;
-    const bankFirst = bankBreach === month;
-    const gtuFirst = gtuBreach === month;
-    return `<tr${(bankFirst || gtuFirst) ? ' style="background:#fff4e5"' : ''}>
-      <td>${month}</td>
-      <td style="text-align:right; ${bankOver ? 'color:#d93025;font-weight:700' : ''}">${fmt(bankRoll)}${bankFirst ? ' ⚠️' : ''}</td>
-      <td style="text-align:right; ${gtuOver ? 'color:#d93025;font-weight:700' : 'color:#6b7280'}">${gtuRoll > 0 ? fmt(gtuRoll) : '—'}${gtuFirst ? ' ⚠️' : ''}</td>
-    </tr>`;
-  }).join('');
+    const noQuarters = quarters.length === 0;
 
-  const bankResult = bankBreach
-    ? `Bank basis crossed £90k at end of <strong>${bankBreach}</strong> → register effective <strong>${effectiveDate(bankBreach)}</strong>`
-    : `Bank basis has not crossed £90k in the data held.`;
-  const gtuResult = gtuBreach
-    ? `GoTeamUp basis crossed £90k at end of <strong>${gtuBreach}</strong> → register effective <strong>${effectiveDate(gtuBreach)}</strong>`
-    : `GoTeamUp basis has not crossed £90k in the data held.`;
-
-  res.send(`<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>VAT Threshold Breach — SPS Fitness</title>
+    res.send(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>VAT Flat Rate — SPS Fitness</title>
 <style>
-  body { font-family: -apple-system, Arial, sans-serif; max-width: 780px; margin: 40px auto; color: #0b0b0f; padding: 0 20px; }
+  body { font-family: -apple-system, Arial, sans-serif; max-width: 820px; margin: 40px auto; color: #0b0b0f; }
   h1 { font-size: 22px; margin-bottom: 4px; }
   .sub { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
-  th { text-align: left; font-size: 10px; text-transform: uppercase; color: #6b7280; padding: 8px 6px; border-bottom: 2px solid #0b0b0f; }
-  td { padding: 8px 6px; border-bottom: 1px solid #f1f3f5; }
-  .result { background: #f8f9ff; border: 1px solid #dce3ff; border-radius: 10px; padding: 16px 20px; margin: 8px 0; font-size: 14px; line-height: 1.7; }
-  .notes { font-size: 12px; color: #6b7280; line-height: 1.6; margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px; }
-  .notes strong { color: #0b0b0f; }
+  h2 { font-size: 15px; border-bottom: 2px solid #0b0b0f; padding-bottom: 6px; margin-top: 30px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; color: #6b7280; padding: 6px 4px; border-bottom: 1px solid #e5e7eb; }
+  td { padding: 6px 4px; border-bottom: 1px solid #f1f3f5; }
+  .total-row td { font-weight: 700; border-top: 2px solid #0b0b0f; border-bottom: none; padding-top: 10px; }
+  .headline { font-size: 26px; font-weight: 800; margin: 8px 0 2px; }
+  .box { background:#f7f8fa; border:1px solid #e5e7eb; border-radius:10px; padding:18px 20px; margin-top:16px; }
   .print-btn { position: fixed; top: 20px; right: 20px; background: #1a4dff; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
-  @media print { .print-btn { display: none; } body { max-width: none; } }
+  @media print { .print-btn { display: none; } }
 </style></head>
 <body>
   <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
-  <h1>SPS Fitness — VAT Threshold Breach Analysis</h1>
-  <div class="sub">Rolling 12-month trading income at each month-end · Generated ${new Date().toLocaleDateString('en-GB')} · Threshold £90,000</div>
+  <h1>SPS Fitness — VAT (Flat Rate Scheme)</h1>
+  <div class="sub">Flat rate ${(VAT_FLAT_RATE * 100).toFixed(1)}% · Bank basis · Registered from ${fmtDate(VAT_REGISTERED_FROM)} · Generated ${new Date().toLocaleDateString('en-GB')}</div>
 
-  <div class="result">${bankResult}</div>
-  <div class="result">${gtuResult}</div>
-
-  <table>
-    <thead><tr>
-      <th>Month end</th>
-      <th style="text-align:right">Rolling 12mth — Bank basis</th>
-      <th style="text-align:right">Rolling 12mth — GoTeamUp basis</th>
-    </tr></thead>
-    <tbody>${rowsHtml}</tbody>
-  </table>
-
-  <div class="notes">
-    <strong>How to read this:</strong> each row is the total trading income for the 12 months ending that month.
-    The ⚠️ marks the first month each basis exceeded £90,000. Figures in red are over the threshold.<br><br>
-    <strong>HMRC registration rule applied:</strong> if you breach at the end of a given month, you must register by the 1st of the second month after — and that date becomes your effective registration date (the date VAT liability starts).<br><br>
-    <strong>Bank basis</strong> matches the previous QuickBooks / cash-accounting approach and is the more likely basis for assessment. <strong>GoTeamUp basis</strong> (charges) is shown alongside as a cross-check — it typically breaches earlier since it excludes fees and payout lag.<br><br>
-    <strong>This is an analysis to hand to your accountant, not a filed determination.</strong> It's only as accurate as the categorised data behind it — confirm the breach month and effective date with your accountant before registering.
+  <div class="box">
+    <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:#6b7280;font-weight:700;">VAT owed since registration (net of reclaims)</div>
+    <div class="headline" style="color:${runningNet >= 0 ? '#0b0b0f' : '#0f9d58'}">${fmt(runningNet)}</div>
+    <div style="font-size:12px;color:#6b7280;">${fmt(totalVat)} flat-rate VAT due, less ${fmt(totalReclaims)} reclaimed on capital assets / pre-registration.</div>
   </div>
+
+  ${noQuarters ? `<p style="margin-top:24px;color:#6b7280;">No VAT period has started yet. Registration begins ${fmtDate(VAT_REGISTERED_FROM)}; the first quarter's figures appear here once trading from that date is recorded. Any reclaims entered below are held ready for the first return.</p>` : `
+  <h2>By quarter</h2>
+  <table>
+    <thead><tr><th>Period</th><th style="text-align:right">Gross takings</th><th style="text-align:right">VAT @ ${(VAT_FLAT_RATE*100).toFixed(1)}%</th><th style="text-align:right">Reclaims</th><th style="text-align:right">Net due</th></tr></thead>
+    <tbody>
+      ${qRows.join('')}
+      <tr class="total-row"><td>Total</td><td style="text-align:right">${fmt(totalGross)}</td><td style="text-align:right">${fmt(totalVat)}</td><td style="text-align:right">-${fmt(totalReclaims)}</td><td style="text-align:right">${fmt(runningNet)}</td></tr>
+    </tbody>
+  </table>`}
+
+  <h2>Reclaims entered</h2>
+  ${reclaims.length ? `<table>
+    <thead><tr><th>Date</th><th>Description</th><th style="text-align:right">Net value</th><th style="text-align:right">VAT reclaimed</th></tr></thead>
+    <tbody>${reclaimRows}<tr class="total-row"><td>Total reclaimed</td><td></td><td></td><td style="text-align:right">${fmt(totalReclaims)}</td></tr></tbody>
+  </table>` : '<p style="color:#6b7280;">No reclaims entered yet.</p>'}
+
+  <p style="margin-top:30px;font-size:11px;color:#9ca3af;line-height:1.5;">
+    Flat Rate Scheme: VAT is charged at ${(VAT_FLAT_RATE*100).toFixed(1)}% of gross (VAT-inclusive) takings; input VAT on normal
+    purchases is not reclaimable. Reclaims shown are capital assets of £2,000+ (VAT-inclusive) and pre-registration claims,
+    entered manually on the accountant's advice. Quarter dates are provisional until confirmed by the VAT certificate.
+    Figures are a working aid, not a substitute for the accountant's filed return.
+  </p>
 </body></html>`);
+  } catch (err) {
+    res.status(500).send('Error: ' + err.message);
+  }
 });
 
 app.get('/report/transactions-csv', async (req, res) => {
