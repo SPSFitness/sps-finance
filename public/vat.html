@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPS Finance — VAT</title>
+<style>
+  :root {
+    --blue: #1a4dff;
+    --teal: #23ccda;
+    --black: #0b0b0f;
+    --grey: #6b7280;
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --border: #e5e7eb;
+    --income: #0f9d58;
+    --expense: #d93025;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--black);
+  }
+  header {
+    background: var(--black);
+    color: white;
+    padding: 20px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+  header h1 span { color: var(--teal); }
+  .back-link { color: var(--teal); font-size: 13px; font-weight: 600; text-decoration: none; }
+  main { max-width: 1000px; margin: 0 auto; padding: 28px; }
+
+  .headline-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 26px 28px;
+    margin-bottom: 20px;
+  }
+  .headline-card .label {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--grey); font-weight: 700;
+  }
+  .headline-card .figure {
+    font-size: 40px; font-weight: 800; letter-spacing: -0.02em; margin: 6px 0 4px;
+  }
+  .headline-card .sub { font-size: 14px; color: var(--grey); line-height: 1.5; }
+  .meta-row {
+    display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px;
+  }
+  .chip {
+    background: #eef2ff; color: var(--blue); font-size: 12px; font-weight: 600;
+    padding: 5px 12px; border-radius: 100px;
+  }
+
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  section h2 {
+    font-size: 14px; font-weight: 700; margin: 0;
+    padding: 16px 22px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .section-body { padding: 6px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--grey); padding: 10px 22px; font-weight: 600; border-bottom: 1px solid var(--border);
+  }
+  td { padding: 11px 22px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .num.bold { font-weight: 700; }
+  .total-row td { font-weight: 800; border-top: 2px solid var(--black); background: #fafbfc; }
+  .empty { padding: 22px; color: var(--grey); font-size: 14px; }
+
+  .report-btn {
+    background: var(--blue); color: white; border: none; padding: 8px 14px;
+    border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none;
+  }
+
+  /* reclaim form */
+  .reclaim-form {
+    display: grid;
+    grid-template-columns: 130px 1fr 120px 120px auto;
+    gap: 10px; align-items: end; padding: 18px 22px;
+  }
+  .reclaim-form .field { display: flex; flex-direction: column; gap: 4px; }
+  .reclaim-form label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--grey); font-weight: 700; }
+  .reclaim-form input {
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 13px; width: 100%;
+  }
+  .add-btn {
+    background: var(--income); color: white; border: none; padding: 9px 16px;
+    border-radius: 6px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+  }
+  .form-note { padding: 0 22px 16px; font-size: 12px; color: var(--grey); line-height: 1.5; }
+  .del-btn {
+    background: white; color: var(--expense); border: 1px solid var(--border);
+    padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .del-btn:hover { background: #fef2f2; border-color: var(--expense); }
+
+  .reference-note {
+    font-size: 12px; color: var(--grey); padding: 0 22px 16px; line-height: 1.5;
+  }
+  .ref-figure { font-size: 22px; font-weight: 800; }
+  .ref-flag { color: var(--expense); font-weight: 700; }
+
+  @media (max-width: 760px) {
+    main { padding: 16px; }
+    header { padding: 16px; }
+    .headline-card .figure { font-size: 32px; }
+    .reclaim-form { grid-template-columns: 1fr 1fr; }
+    .reclaim-form .field.desc { grid-column: 1 / -1; }
+    .add-btn { grid-column: 1 / -1; }
+    th, td { padding: 10px 14px; }
+    table { display: block; overflow-x: auto; white-space: nowrap; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SPS <span>Finance</span> · VAT</h1>
+  <a href="#" class="back-link" id="backLink">← Back to dashboard</a>
+</header>
+
+<main>
+  <div class="headline-card">
+    <div class="label">VAT owed since registration — net of reclaims</div>
+    <div class="figure" id="runningTotal">Loading…</div>
+    <div class="sub" id="runningSub"></div>
+    <div class="meta-row" id="metaRow"></div>
+  </div>
+
+  <section>
+    <h2>
+      <span>VAT owed by quarter</span>
+      <a class="report-btn" id="reportBtn" href="#" target="_blank">Printable summary (PDF)</a>
+    </h2>
+    <div class="section-body">
+      <div id="quarterTable"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Reclaim capital assets / pre-registration VAT</h2>
+    <form class="reclaim-form" id="reclaimForm">
+      <div class="field">
+        <label for="rDate">Date</label>
+        <input type="date" id="rDate" required>
+      </div>
+      <div class="field desc">
+        <label for="rDesc">Description</label>
+        <input type="text" id="rDesc" placeholder="e.g. 3 racks, benches & barbells — £7k invoice" required>
+      </div>
+      <div class="field">
+        <label for="rNet">Net value (opt.)</label>
+        <input type="number" step="0.01" id="rNet" placeholder="0.00">
+      </div>
+      <div class="field">
+        <label for="rVat">VAT to reclaim</label>
+        <input type="number" step="0.01" id="rVat" placeholder="0.00" required>
+      </div>
+      <button type="submit" class="add-btn">Add reclaim</button>
+    </form>
+    <div class="form-note">
+      Flat rate scheme — input VAT on normal purchases can't be reclaimed. Enter only capital assets of
+      £2,000+ (VAT-inclusive) in a single purchase, and the pre-registration claim (assets still on hand,
+      back to Oct 2025). Enter the VAT value your accountant confirms; nothing is auto-claimed. Each reclaim
+      is netted against the quarter its date falls in.
+    </div>
+    <div id="reclaimList"></div>
+  </section>
+
+  <section>
+    <h2>Reference only — GoTeamUp cross-check</h2>
+    <div class="reference-note" id="gtuRef">Loading…</div>
+  </section>
+</main>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const KEY = params.get('key') || '';
+
+  document.getElementById('backLink').href = '/index.html?key=' + KEY;
+  document.getElementById('reportBtn').href = '/report/vat-flat-rate?key=' + KEY;
+
+  function fmt(n) {
+    const num = Number(n);
+    return (num < 0 ? '-£' : '£') + Math.abs(num).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function fmtDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  async function api(path, opts) {
+    const sep = path.includes('?') ? '&' : '?';
+    const res = await fetch(path + sep + 'key=' + KEY, opts);
+    if (!res.ok) {
+      let msg = 'API error ' + res.status;
+      try { const j = await res.json(); if (j.error) msg = j.error; } catch (e) {}
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
+  async function loadVat() {
+    const data = await api('/api/vat-flat-rate');
+    const t = data.totals;
+
+    document.getElementById('runningTotal').textContent = fmt(t.runningNetOwed);
+    document.getElementById('runningSub').innerHTML =
+      `${fmt(t.totalVatDue)} flat-rate VAT due` +
+      (t.totalReclaims > 0 ? `, less ${fmt(t.totalReclaims)} reclaimed` : '') +
+      `. Based on ${fmt(t.totalGross)} gross takings since registration.`;
+
+    document.getElementById('metaRow').innerHTML =
+      `<span class="chip">${(data.flatRate * 100).toFixed(1)}% flat rate</span>` +
+      `<span class="chip">Bank basis</span>` +
+      `<span class="chip">Registered ${fmtDate(data.registeredFrom)}</span>` +
+      `<span class="chip">Quarters provisional until certificate</span>`;
+
+    const qc = document.getElementById('quarterTable');
+    if (!data.quartersStartedYet || data.quarters.length === 0) {
+      qc.innerHTML = `<div class="empty">No VAT period has started yet. Registration begins
+        ${fmtDate(data.registeredFrom)} — the first quarter's figures appear here once trading from
+        that date is recorded. Any reclaims you enter below are held ready for the first return.</div>`;
+    } else {
+      const rows = data.quarters.map(q => `
+        <tr>
+          <td>${fmtDate(q.from)} – ${fmtDate(q.to)}</td>
+          <td class="num">${fmt(q.grossTakings)}</td>
+          <td class="num">${fmt(q.vatDue)}</td>
+          <td class="num">${q.reclaimTotal ? '-' + fmt(q.reclaimTotal) : '—'}</td>
+          <td class="num bold">${fmt(q.netDue)}</td>
+        </tr>`).join('');
+      qc.innerHTML = `
+        <table>
+          <thead><tr>
+            <th>Period</th>
+            <th class="num">Gross takings</th>
+            <th class="num">VAT @ ${(data.flatRate*100).toFixed(1)}%</th>
+            <th class="num">Reclaims</th>
+            <th class="num">Net due</th>
+          </tr></thead>
+          <tbody>
+            ${rows}
+            <tr class="total-row">
+              <td>Total</td>
+              <td class="num">${fmt(t.totalGross)}</td>
+              <td class="num">${fmt(t.totalVatDue)}</td>
+              <td class="num">-${fmt(t.totalReclaims)}</td>
+              <td class="num">${fmt(t.runningNetOwed)}</td>
+            </tr>
+          </tbody>
+        </table>`;
+    }
+
+    renderReclaims(data.reclaims || []);
+  }
+
+  function renderReclaims(reclaims) {
+    const el = document.getElementById('reclaimList');
+    if (!reclaims.length) {
+      el.innerHTML = '<div class="empty">No reclaims entered yet.</div>';
+      return;
+    }
+    const rows = reclaims.map(rc => `
+      <tr>
+        <td>${fmtDate(rc.reclaim_date)}</td>
+        <td>${rc.description}</td>
+        <td class="num">${rc.net_amount ? fmt(rc.net_amount) : '—'}</td>
+        <td class="num bold">${fmt(rc.vat_amount)}</td>
+        <td class="num"><button class="del-btn" onclick="deleteReclaim(${rc.id})">Remove</button></td>
+      </tr>`).join('');
+    el.innerHTML = `
+      <table>
+        <thead><tr><th>Date</th><th>Description</th><th class="num">Net value</th><th class="num">VAT reclaimed</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  async function deleteReclaim(id) {
+    if (!confirm('Remove this reclaim?')) return;
+    await api('/api/vat-reclaims/' + id, { method: 'DELETE' });
+    loadVat();
+  }
+
+  document.getElementById('reclaimForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = {
+      reclaim_date: document.getElementById('rDate').value,
+      description: document.getElementById('rDesc').value.trim(),
+      net_amount: document.getElementById('rNet').value || null,
+      vat_amount: document.getElementById('rVat').value
+    };
+    if (!body.reclaim_date || !body.description || body.vat_amount === '') {
+      alert('Date, description and VAT amount are required.');
+      return;
+    }
+    try {
+      await api('/api/vat-reclaims', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      e.target.reset();
+      loadVat();
+    } catch (err) {
+      alert('Could not save reclaim: ' + err.message);
+    }
+  });
+
+  async function loadGtuReference() {
+    const el = document.getElementById('gtuRef');
+    try {
+      const data = await api('/api/vat-check');
+      if (!data.gtuComparison) {
+        el.innerHTML = 'No GoTeamUp data available for cross-check.';
+        return;
+      }
+      const g = data.gtuComparison;
+      const diffAbs = Math.abs(g.differenceFromBank);
+      const dir = g.differenceFromBank > 0 ? 'higher' : 'lower';
+      el.innerHTML =
+        `<p>Your accountant has confirmed VAT is calculated on the <strong>bank basis</strong> — the figures above
+          are what matters for your return. The GoTeamUp charge data below is kept here purely for reference /
+          sanity-checking and does <strong>not</strong> feed the VAT owed figures.</p>
+        <p style="margin-top:10px;">GoTeamUp actual charges, rolling 12 months:
+          <span class="ref-figure">${fmt(g.gtuTotal)}</span>
+          (${g.txnCount} records, ${fmtDate(g.earliest)} to ${fmtDate(g.latest)}).
+          That's ${fmt(diffAbs)} ${dir} than the ${fmt(data.rollingTotal)} that landed in the bank over the same period —
+          the gap is processing fees and payout timing.</p>
+        <p style="margin-top:10px;font-size:11px;color:#9ca3af;">July–November 2025 in the GoTeamUp figure is reconstructed
+          from bank deposits (pre-GoTeamUp era); December 2025 onward is real GoTeamUp export data.</p>`;
+    } catch (err) {
+      el.innerHTML = 'Could not load reference data: ' + err.message;
+    }
+  }
+
+  loadVat();
+  loadGtuReference();
+</script>
+
+</body>
+</html>
