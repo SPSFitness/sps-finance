@@ -1071,23 +1071,19 @@
         ? ` (only ${cm.daysElapsedInMonth} day${cm.daysElapsedInMonth === 1 ? '' : 's'} into the month so far — early, treat this loosely)`
         : ` (${cm.daysElapsedInMonth} of ${cm.daysInMonth} days into the month)`;
 
-      const overtext = cm.projectedOverThreshold
-        ? `<strong style="color:var(--expense)">this would put you over the £90,000 threshold by month-end.</strong>`
-        : `this would leave your rolling total at roughly ${fmt(cm.projectedRollingTotal)} by month-end.`;
-
-      const gtuLine = (cm.monthGtuActual !== null)
-        ? `<div style="margin-top:8px;">GoTeamUp actual charges this month: <strong>${fmt(cm.monthGtuActual)}</strong>` +
-          (cm.usingGtuBasis
-            ? ` <span style="color:var(--expense);">— higher than bank deposits, used as the basis for the projection below since it's more accurate.</span>`
-            : ``) +
-          `</div>`
-        : '';
+      // Bank basis only — recompute here so the daily rate and month-end figure stay
+      // internally consistent. The GoTeamUp cross-check now lives on the VAT tab.
+      const bankDaily = cm.daysElapsedInMonth > 0 ? cm.monthActualSoFar / cm.daysElapsedInMonth : 0;
+      const bankProjectedMonth = bankDaily * cm.daysInMonth;
+      const bankProjectedRolling = data.rollingTotal - cm.monthActualSoFar + bankProjectedMonth;
+      const overtext = bankProjectedRolling >= data.threshold
+        ? `<strong style="color:var(--expense)">this keeps your rolling total above the £90,000 threshold.</strong>`
+        : `this would leave your rolling total at roughly ${fmt(bankProjectedRolling)} by month-end.`;
 
       document.getElementById('vatMonthTrajectory').innerHTML =
-        `<div>This month so far (bank deposits): <strong>${fmt(cm.monthActualSoFar)}</strong> in${confidenceNote}.</div>` +
-        gtuLine +
-        `<div style="margin-top:8px;">At this daily pace (~${fmt(cm.projectedMonthTotal / cm.daysInMonth)}/day), ` +
-        `you're on track for roughly <strong>${fmt(cm.projectedMonthTotal)}</strong> this month — ${overtext}</div>`;
+        `<div>This month so far: <strong>${fmt(cm.monthActualSoFar)}</strong> in${confidenceNote}.</div>` +
+        `<div style="margin-top:8px;">At this daily pace (~${fmt(bankDaily)}/day), ` +
+        `you're on track for roughly <strong>${fmt(bankProjectedMonth)}</strong> this month — ${overtext}</div>`;
     }
 
     // GoTeamUp cross-check lives on the VAT tab now (reference only) — the accountant
